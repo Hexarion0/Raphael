@@ -54,7 +54,7 @@ def main() -> int:
         "--show-ai-transcripts",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help="Show each AI sentence as playback starts",
+        help="Reveal AI captions as the voice speaks",
     )
     parser.add_argument(
         "--count",
@@ -238,12 +238,17 @@ def main() -> int:
             retry_min_free_mb=settings.audio.stt_retry_min_free_mb,
             wake_phrase=settings.audio.wake_word,
         )
+        show_ai_transcripts = (
+            settings.audio.show_ai_transcripts
+            if args.show_ai_transcripts is None else args.show_ai_transcripts
+        )
         tts = TextToSpeech(
             voice_name=settings.audio.tts_voice,
             engine=settings.audio.tts_engine,
             speed=settings.audio.tts_speed,
             output_device=settings.audio.output_device,
             enabled=settings.audio.tts_enabled,
+            **({"include_alignments": True} if show_ai_transcripts else {}),
         )
         router = get_model_router()
         from raphael.audio.ambient import AmbientConversation, SpeechDecision
@@ -258,10 +263,13 @@ def main() -> int:
         pending_speech: list[str] = []
         unfinished_request: list[dict] = [{}]
         interrupted_reply: list[dict] = [{}]
-        show_ai_transcripts = (
-            settings.audio.show_ai_transcripts
-            if args.show_ai_transcripts is None else args.show_ai_transcripts
-        )
+        captions = None
+        if show_ai_transcripts:
+            from raphael.audio.captions import TerminalCaptions
+
+            captions = TerminalCaptions()
+        playback_captions = show_ai_transcripts and settings.audio.tts_enabled
+        log_reply = logger.debug if playback_captions else logger.info
 
         memory_store = MemoryStore(db_path=settings.memory.db_path)
         conv_manager = ConversationManager(
@@ -297,12 +305,18 @@ def main() -> int:
             _in_followup[0] = False
 
         def show_spoken_sentence(text: str) -> None:
-            logger.info('🤖 RAPHAEL (speaking): "%s"', tts.clean_text_for_speech(text))
+            if captions is not None:
+                captions.start(tts.clean_text_for_speech(text))
+
+        def show_speech_progress(visible: str, finished: bool, interrupted: bool) -> None:
+            if captions is not None:
+                captions.update(visible, finished=finished, interrupted=interrupted)
 
         def speak_reply(text: str, block: bool = True, cancel_event=None) -> bool:
             if not loop.is_running or (cancel_event is not None and cancel_event.is_set()):
                 return False
             controls = {}
+            progress_seen = [False]
             if cancel_event is not None:
                 controls["cancel_event"] = cancel_event
             if show_ai_transcripts:
@@ -311,7 +325,29 @@ def main() -> int:
                         show_spoken_sentence(text)
 
                 controls["on_start"] = audio_started
-            return tts.speak(text, block=block, **controls)
+                def progress(visible: str, finished: bool, interrupted: bool) -> None:
+                    if (
+                        loop.is_running and (cancel_event is None or not cancel_event.is_set())
+                    ) or finished or interrupted:
+                        progress_seen[0] |= bool(visible.strip())
+                        show_speech_progress(visible, finished, interrupted)
+
+                controls["on_progress"] = progress
+            try:
+                spoken = tts.speak(text, block=block, **controls)
+            except Exception as err:
+                if not playback_captions:
+                    raise
+                logger.warning("Reply audio failed: %s", err)
+                spoken = False
+            if (
+                playback_captions and not spoken and not progress_seen[0]
+                and loop.is_running and (cancel_event is None or not cancel_event.is_set())
+            ):
+                if captions is not None:
+                    captions.close()
+                logger.info('🤖 RAPHAEL (text): "%s"', text)
+            return spoken
 
         def linked_fragments(info: dict) -> list[str]:
             """Recover a request only when this recording canceled that exact request."""
@@ -426,7 +462,7 @@ def main() -> int:
             if not cleaned_query:
                 # User just said the wake word with no follow-up
                 reply = "Hey! What's on your mind?"
-                logger.info('🤖 RAPHAEL: "%s"', reply)
+                log_reply('🤖 RAPHAEL: "%s"', reply)
                 say(reply)
                 _in_followup[0] = True
                 return True
@@ -459,7 +495,7 @@ def main() -> int:
                 conv_manager.add_turn(
                     role="assistant", content=memory_reply, provider="local", model="memory",
                 )
-                logger.info('🤖 RAPHAEL: "%s" [local/memory]', memory_reply)
+                log_reply('🤖 RAPHAEL: "%s" [local/memory]', memory_reply)
                 say(memory_reply)
                 _in_followup[0] = True
                 return True
@@ -470,7 +506,7 @@ def main() -> int:
                 unfinished_request[0] = {}
                 logger.info("👋 Farewell detected in user query — ending session.")
                 farewell_reply = "Talk to you soon, take care!"
-                logger.info('🤖 RAPHAEL: "%s"', farewell_reply)
+                log_reply('🤖 RAPHAEL: "%s"', farewell_reply)
                 say(farewell_reply)
                 ambient_context.deadline = 0.0
                 _in_followup[0] = False
@@ -497,7 +533,7 @@ def main() -> int:
                 conv_manager.add_turn(
                     role="assistant", content=local_reply, provider="local", model="clock",
                 )
-                logger.info('🤖 RAPHAEL: "%s" [local/clock]', local_reply)
+                log_reply('🤖 RAPHAEL: "%s" [local/clock]', local_reply)
                 say(local_reply)
                 if current() and unfinished_request[0] is request:
                     unfinished_request[0] = {}
@@ -573,6 +609,7 @@ def main() -> int:
                     streamed = stream_reply(
                         router, context_messages, tts, current, cancel_event=cancel_event,
                         on_sentence_start=show_spoken_sentence if show_ai_transcripts else None,
+                        on_progress=show_speech_progress if show_ai_transcripts else None,
                     )
                     response = streamed.response
                     request["reply_started"] = streamed.first_audio_seconds is not None
@@ -590,7 +627,7 @@ def main() -> int:
                     logger.info("Discarded an old response because speech resumed.")
                     return False
                 reply_text = response.content.strip()
-                logger.info(
+                log_reply(
                     '🤖 RAPHAEL: "%s" [%s/%s]',
                     reply_text,
                     response.provider,
@@ -618,6 +655,8 @@ def main() -> int:
                     said = say(reply_text)
                 else:
                     said = streamed.spoken
+                    if playback_captions and not said and streamed.first_audio_seconds is None:
+                        logger.info('🤖 RAPHAEL (text): "%s"', reply_text)
                     if ambient_enabled[0]:
                         ambient_context.record_addressed("assistant", reply_text)
                         ambient_context.replied()
@@ -705,24 +744,36 @@ def main() -> int:
             barge_in_speech_seconds=settings.audio.barge_in_speech_seconds,
         )
 
-        loop.start()
-        if ambient_enabled[0]:
-            logger.info(
-                "Ambient listening active; follow-up policy=%s, window=%.0fs.",
-                settings.audio.ambient_followup_policy, settings.audio.ambient_followup_seconds,
-            )
-        else:
-            logger.info(
-                "Awaiting wake word... Say '%s' followed by your question.",
-                settings.audio.wake_word.title(),
-            )
+        restore_caption_logging = None
+        if captions is not None:
+            from raphael.audio.captions import install_caption_logging
+
+            restore_caption_logging = install_caption_logging(captions)
         try:
+            loop.start()
+            if ambient_enabled[0]:
+                logger.info(
+                    "Ambient listening active; follow-up policy=%s, window=%.0fs.",
+                    settings.audio.ambient_followup_policy, settings.audio.ambient_followup_seconds,
+                )
+            else:
+                logger.info(
+                    "Awaiting wake word... Say '%s' followed by your question.",
+                    settings.audio.wake_word.title(),
+                )
             while True:
                 time.sleep(0.5)
         except KeyboardInterrupt:
             loop.stop()
             logger.info("Wake listener terminated cleanly.")
             return 0
+        finally:
+            try:
+                if captions is not None:
+                    captions.close()
+            finally:
+                if restore_caption_logging is not None:
+                    restore_caption_logging()
 
     logger.info("Ready. Use 'python -m raphael --listen' for live voice listening.")
     logger.info("Use 'python -m raphael record-samples' to record voice samples.")

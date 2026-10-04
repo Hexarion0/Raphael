@@ -163,7 +163,7 @@ def test_vad_preserves_partial_chunks_and_converts_integer_audio(monkeypatch):
 def run_callbacks(
     tmp_path, monkeypatch, utterances, *, ambient=True, router=None, observed=None,
     tts=None, interrupted=None,
-    streaming=False, clock=None, ai_transcripts=False, cli_args=(),
+    streaming=False, clock=None, ai_transcripts=False, cli_args=(), tts_enabled=True,
 ):
     """Run real CLI callbacks using an isolated DB and no audio hardware."""
     import sys
@@ -175,6 +175,7 @@ def run_callbacks(
     settings = config.Settings(
         _env_file=None, memory_db_path=str(tmp_path / "memory.db"), tts_streaming=streaming,
         show_ai_transcripts=ai_transcripts,
+        tts_enabled=tts_enabled,
     )
     monkeypatch.setattr(config, "get_settings", lambda: settings)
     monkeypatch.setattr(platform, "get_audio_backend", MagicMock())
@@ -229,11 +230,19 @@ def test_live_ai_transcript_config_and_cli_override_at_local_playback(
     tts.clean_text_for_speech.side_effect = TextToSpeech.clean_text_for_speech
 
     def speak(text, **controls):
-        assert '(speaking)' not in capsys.readouterr().out
+        lines = capsys.readouterr().out.splitlines()
+        assert not any(line.startswith('RAPHAEL: ') for line in lines)
+        if enabled:
+            assert "Hey! What's on your mind?" not in '\n'.join(lines)
         callback = controls.get('on_start')
         assert bool(callback) is enabled
+        assert bool(controls.get('on_progress')) is enabled
         if callback:
             callback()
+            assert capsys.readouterr().out == ''  # Starting audio does not reveal its ending.
+            controls['on_progress']('Hey', False, False)
+            assert capsys.readouterr().out == ''  # Non-TTY output waits for a safe snapshot.
+            controls['on_progress'](TextToSpeech.clean_text_for_speech(text), True, False)
         return True
 
     tts.speak.side_effect = speak
@@ -243,7 +252,10 @@ def test_live_ai_transcript_config_and_cli_override_at_local_playback(
     )
     try:
         output = capsys.readouterr().out
-        assert ('RAPHAEL (speaking): "Hey! What\'s on your mind?"' in output) is enabled
+        assert ("RAPHAEL: Hey! What's on your mind?" in output) is enabled
+        from raphael import audio
+
+        assert audio.TextToSpeech.call_args.kwargs.get('include_alignments', False) is enabled
     finally:
         store.close()
 
@@ -265,6 +277,9 @@ def test_live_ai_transcripts_show_clean_speech_and_persist_one_reply(
 
     def speak(_text, **controls):
         controls['on_start']()
+        cleaned = TextToSpeech.clean_text_for_speech(_text)
+        controls['on_progress'](cleaned[:4], False, False)
+        controls['on_progress'](cleaned, True, False)
         return True
 
     tts.speak.side_effect = speak
@@ -274,13 +289,11 @@ def test_live_ai_transcripts_show_clean_speech_and_persist_one_reply(
     )
     try:
         output = capsys.readouterr().out
-        live_lines = [line for line in output.splitlines() if 'RAPHAEL (speaking):' in line]
+        live_lines = [line for line in output.splitlines() if line.startswith('RAPHAEL: ')]
         expected = ['First sentence.', 'Second sentence.'] if streaming else [
             'First sentence. Second sentence.',
         ]
-        assert [line.split('RAPHAEL (speaking): ')[1] for line in live_lines] == [
-            f'"{sentence}"' for sentence in expected
-        ]
+        assert [line.removeprefix('RAPHAEL: ') for line in live_lines] == expected
         assert [turn.content for turn in turns if turn.role == 'assistant'] == [text]
     finally:
         store.close()
@@ -293,7 +306,9 @@ def test_failed_local_playback_has_no_live_ai_transcript(tmp_path, monkeypatch, 
         tmp_path, monkeypatch, [('Hey Raphael.', {})], tts=tts, ai_transcripts=True,
     )
     try:
-        assert 'RAPHAEL (speaking):' not in capsys.readouterr().out
+        lines = capsys.readouterr().out.splitlines()
+        assert not any(line.startswith('RAPHAEL: ') for line in lines)
+        assert any('RAPHAEL (text): "Hey! What\'s on your mind?"' in line for line in lines)
     finally:
         store.close()
 
@@ -315,8 +330,170 @@ def test_cancellation_before_batch_playback_callback_has_no_live_ai_transcript(
         router=router, tts=tts, ai_transcripts=True,
     )
     try:
-        assert 'RAPHAEL (speaking):' not in capsys.readouterr().out
+        lines = capsys.readouterr().out.splitlines()
+        assert not any(line.startswith('RAPHAEL: ') for line in lines)
         assert [turn.content for turn in turns if turn.role == 'assistant'] == ['Canceled reply.']
+    finally:
+        store.close()
+
+
+def test_caption_logging_uses_root_handler_and_restores_on_shutdown(
+    tmp_path, monkeypatch, capsys,
+):
+    import logging
+
+    from raphael.audio import captions
+    from raphael.audio.tts import TextToSpeech
+
+    installer = captions.install_caption_logging
+    restored = []
+
+    def install(renderer, logger=None):
+        assert logger is None  # RAPHAEL's console handler belongs to the root logger.
+        root = logging.getLogger()
+        originals = root.handlers[:]
+        restore = installer(renderer)
+        assert any(isinstance(handler, captions.CaptionLoggingHandler) for handler in root.handlers)
+
+        def restore_and_check():
+            restore()
+            assert root.handlers == originals
+            restored.append(True)
+
+        return restore_and_check
+
+    monkeypatch.setattr(captions, 'install_caption_logging', install)
+    tts = MagicMock()
+    tts.clean_text_for_speech.side_effect = TextToSpeech.clean_text_for_speech
+
+    def speak(_text, **controls):
+        controls['on_start']()
+        controls['on_progress']('Hey', False, False)
+        # Leave a partial line open so shutdown must finish it before restoring logs.
+        return True
+
+    tts.speak.side_effect = speak
+    _router, _tts, _loop, store, _turns = run_callbacks(
+        tmp_path, monkeypatch, [('Hey Raphael.', {})], tts=tts, ai_transcripts=True,
+    )
+    try:
+        assert restored == [True]
+        assert 'RAPHAEL: Hey [interrupted]' in capsys.readouterr().out
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize('tty', [False, True])
+@pytest.mark.parametrize('kind', ['greeting', 'clock', 'batch'])
+def test_full_response_is_not_revealed_before_playback_progress(
+    tmp_path, monkeypatch, capsys, tty, kind,
+):
+    import io
+
+    from raphael.audio import captions
+    from raphael.audio.tts import TextToSpeech
+
+    class CaptionStream(io.StringIO):
+        def isatty(self):
+            return tty
+
+    output = CaptionStream()
+    renderer = captions.TerminalCaptions(output, width=120)
+    monkeypatch.setattr(captions, 'TerminalCaptions', lambda: renderer)
+    router, tts = MagicMock(), MagicMock()
+    router.send.return_value = LLMResponse('The full answer ends right here.', 'test', 'test')
+    tts.clean_text_for_speech.side_effect = TextToSpeech.clean_text_for_speech
+    spoken = []
+
+    def speak(text, **controls):
+        full = TextToSpeech.clean_text_for_speech(text)
+        assert full not in capsys.readouterr().out + output.getvalue()
+        controls['on_start']()
+        assert full not in capsys.readouterr().out + output.getvalue()
+        controls['on_progress'](full[:max(1, len(full) // 3)], False, False)
+        assert full not in capsys.readouterr().out + output.getvalue()
+        controls['on_progress'](full, True, False)
+        spoken.append(full)
+        return True
+
+    tts.speak.side_effect = speak
+    text = {
+        'greeting': 'Hey Raphael.', 'clock': 'Raphael, what time is it?',
+        'batch': 'Raphael, explain this.',
+    }[kind]
+    _router, _tts, _loop, store, turns = run_callbacks(
+        tmp_path, monkeypatch, [(text, {})], router=router, tts=tts, ai_transcripts=True,
+    )
+    try:
+        assert len(spoken) == 1 and spoken[0] in output.getvalue()
+        assert ('\x1b[2K' in output.getvalue()) is tty
+        if kind != 'greeting':
+            assert [turn.content for turn in turns if turn.role == 'assistant'] == spoken
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize('failure', ['returns_false', 'raises'])
+@pytest.mark.parametrize('kind', ['greeting', 'batch'])
+def test_audio_failure_keeps_full_reply_available_as_text(
+    tmp_path, monkeypatch, capsys, failure, kind,
+):
+    router, tts = MagicMock(), MagicMock()
+    full = "Hey! What's on your mind?" if kind == 'greeting' else 'The complete intended answer.'
+    router.send.return_value = LLMResponse(full, 'test', 'test')
+
+    def speak(_text, **controls):
+        assert full not in capsys.readouterr().out
+        if failure == 'raises':
+            raise RuntimeError('The audio device is unavailable')
+        return False
+
+    tts.speak.side_effect = speak
+    text = 'Hey Raphael.' if kind == 'greeting' else 'Raphael, explain this.'
+    _router, _tts, _loop, store, turns = run_callbacks(
+        tmp_path, monkeypatch, [(text, {})], router=router, tts=tts, ai_transcripts=True,
+    )
+    try:
+        assert f'RAPHAEL (text): "{full}"' in capsys.readouterr().out
+        if kind == 'batch':
+            assert [turn.content for turn in turns if turn.role == 'assistant'] == [full]
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize('captions_enabled, tts_enabled', [(False, True), (True, False)])
+def test_regular_reply_logs_remain_when_playback_captions_are_inactive(
+    tmp_path, monkeypatch, capsys, captions_enabled, tts_enabled,
+):
+    tts = MagicMock()
+    full = "Hey! What's on your mind?"
+
+    def speak(_text, **controls):
+        assert f'RAPHAEL: "{full}"' in capsys.readouterr().out
+        return tts_enabled
+
+    tts.speak.side_effect = speak
+    _router, _tts, _loop, store, _turns = run_callbacks(
+        tmp_path, monkeypatch, [('Hey Raphael.', {})], tts=tts,
+        ai_transcripts=captions_enabled, tts_enabled=tts_enabled,
+    )
+    store.close()
+
+
+def test_generated_stream_without_audio_retains_full_text_answer(tmp_path, monkeypatch, capsys):
+    from raphael.providers.base import LLMStreamChunk
+
+    full = 'This generated answer is still available without audio.'
+    router, tts = MagicMock(), MagicMock()
+    router.stream.side_effect = lambda *args, **kwargs: iter([LLMStreamChunk(full, 'test', 'test')])
+    tts.speak.return_value = False
+    _router, _tts, _loop, store, turns = run_callbacks(
+        tmp_path, monkeypatch, [('Raphael, explain this.', {})], router=router, tts=tts,
+        streaming=True, ai_transcripts=True,
+    )
+    try:
+        assert f'RAPHAEL (text): "{full}"' in capsys.readouterr().out
+        assert [turn.content for turn in turns if turn.role == 'assistant'] == [full]
     finally:
         store.close()
 

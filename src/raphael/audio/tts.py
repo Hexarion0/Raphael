@@ -17,6 +17,7 @@ from piper import PiperVoice
 from piper.config import SynthesisConfig
 from piper.download_voices import download_voice
 
+from raphael.audio.alignment import CharacterTimeline, character_timeline, estimated_timeline
 from raphael.audio.native import sd
 from raphael.config import get_settings, normalize_audio_device
 from raphael.logging import get_logger
@@ -94,6 +95,7 @@ class TextToSpeech:
         fish_repetition_penalty: float | None = None,
         fish_chunk_length: int | None = None,
         fish_max_new_tokens: int | None = None,
+        include_alignments: bool = False,
     ) -> None:
         settings = get_settings().audio
 
@@ -107,6 +109,8 @@ class TextToSpeech:
             output_device if output_device is not None else settings.output_device
         )
         self.enabled = enabled
+        self.include_alignments = include_alignments
+        self._synthesis_timing = threading.local()
 
         # Fish Speech zero-shot parameters
         self.fish_speech_url = fish_speech_url or settings.fish_speech_url
@@ -134,10 +138,12 @@ class TextToSpeech:
         self._is_playing = False
         self._playback_lock = threading.Lock()
         self._playback_generation = 0
+        self._playback_serial = 0
         self._stop_event = threading.Event()  # signals stop() to unblock speak(block=True)
         self._pending_text = ""
         self._play_started_at = 0.0
         self._play_duration = 0.0
+        self._play_stopped_at = 0.0
         self._stream_text = ""
         self._stream_spoken: list[str] | None = None
         self._stream_played_seconds = 0.0
@@ -172,6 +178,7 @@ class TextToSpeech:
                 model_path=str(onnx_path),
                 config_path=str(json_path),
                 use_cuda=False,
+                **({"include_alignments": True} if self.include_alignments else {}),
             )
             logger.info("Piper TTS engine initialized successfully.")
         except Exception as err:
@@ -307,6 +314,7 @@ class TextToSpeech:
                     model_path=str(onnx),
                     config_path=str(config),
                     use_cuda=False,
+                    **({"include_alignments": True} if self.include_alignments else {}),
                 )
                 logger.info("Using local Piper fallback voice '%s'.", name)
                 return self._synthesize_piper(text, voice=self._fallback_voice)
@@ -370,17 +378,27 @@ class TextToSpeech:
         )
 
         audio_chunks: list[np.ndarray] = []
+        aligned_chunks = []
         sample_rate = 22050
 
-        for chunk in voice.synthesize(text, syn_config=syn_config):
+        for chunk in voice.synthesize(
+            text, syn_config=syn_config,
+            **({"include_alignments": True} if self.include_alignments else {}),
+        ):
             sample_rate = chunk.sample_rate
             if chunk.audio_float_array is not None and chunk.audio_float_array.size > 0:
                 audio_chunks.append(chunk.audio_float_array)
+                aligned_chunks.append(chunk)
 
         if not audio_chunks:
             return None
 
         combined_audio = np.concatenate(audio_chunks)
+        if self.include_alignments:
+            timeline = character_timeline(
+                text, aligned_chunks, sample_rate, combined_audio.size, phonemize=voice.phonemize,
+            )
+            self._synthesis_timing.result = combined_audio, timeline
         return combined_audio, sample_rate
 
     def synthesize(self, text: str) -> tuple[np.ndarray, int] | None:
@@ -426,7 +444,7 @@ class TextToSpeech:
 
     def _synthesize_cancelable(
         self, text: str, cancel_event: threading.Event, generation: int,
-    ) -> tuple[np.ndarray, int] | None:
+    ) -> tuple[np.ndarray, int, CharacterTimeline] | None:
         """Let a canceled caller leave while a bounded synthesis job unwinds.
 
         Voice inference is serialized: an old Piper/Fish job cannot race a new
@@ -448,7 +466,7 @@ class TextToSpeech:
                     if acquired:
                         break
                 if acquired and current():
-                    result.put(self.synthesize(text))
+                    result.put(self._prepare_playback(text))
                 else:
                     result.put(None)
             except Exception as err:
@@ -474,6 +492,20 @@ class TextToSpeech:
                 continue
         return None
 
+    def _prepare_playback(self, text: str) -> tuple[np.ndarray, int, CharacterTimeline] | None:
+        """Keep timing attached to the exact audio from this synthesis job."""
+        self._synthesis_timing.result = None
+        result = self.synthesize(text)
+        if result is None:
+            return None
+        audio, sample_rate = result
+        aligned = self._synthesis_timing.result
+        timeline = (
+            aligned[1] if aligned is not None and aligned[0] is audio
+            else estimated_timeline(self.clean_text_for_speech(text), audio.size / sample_rate)
+        )
+        return audio, sample_rate, timeline
+
     def speak(
         self,
         text: str,
@@ -482,6 +514,7 @@ class TextToSpeech:
         cancel_event: threading.Event | None = None,
         generation: int | None = None,
         on_start: Callable[[], None] | None = None,
+        on_progress: Callable[[str, bool, bool], None] | None = None,
     ) -> bool:
         """Synthesize and play speech audio through speakers."""
         if not self.enabled:
@@ -499,14 +532,14 @@ class TextToSpeech:
             synth_result = self._synthesize_cancelable(text, cancel_event, generation)
         else:
             with self._synthesis_lock:
-                synth_result = self.synthesize(text)
+                synth_result = self._prepare_playback(text)
         if synth_result is None:
             with self._playback_lock:
                 if generation == self._playback_generation:
                     self._pending_text = ""
             return False
 
-        audio, sample_rate = synth_result
+        audio, sample_rate, timeline = synth_result
 
         try:
             with self._playback_lock:
@@ -516,50 +549,97 @@ class TextToSpeech:
                 ):
                     return False
                 self._stop_event.clear()
+                self._play_stopped_at = 0.0
+                self._playback_serial += 1
+                serial = self._playback_serial
                 self._is_playing = True
                 self._play_started_at = time.monotonic()
                 self._play_duration = audio.size / sample_rate
                 sd.play(audio, samplerate=sample_rate, device=self.output_device)
+                self._play_started_at = time.monotonic()
+                started = self._play_started_at
+            try:
+                latency = float(getattr(sd.get_stream(), "latency", 0.0))
+                latency = latency if np.isfinite(latency) and latency >= 0 else 0.0
+            except Exception:
+                latency = 0.0
             if on_start:
                 on_start()
-            if block:
-                # Poll our stop_event instead of calling sd.wait() directly.
-                # On Linux, sd.stop() does not reliably unblock a concurrent sd.wait()
-                # due to a PortAudio race condition, which permanently stalls the worker.
-                while not self._stop_event.wait(timeout=0.02):
-                    if cancel_event and cancel_event.is_set():
-                        self.stop()
-                        break
-                    try:
-                        if not sd.get_stream().active:
-                            break
-                    except Exception:
-                        break  # stream gone — playback finished
-                with self._playback_lock:
-                    if generation == self._playback_generation:
-                        self._is_playing = False
-                        if self._stream_spoken is not None:
-                            self._stream_spoken.append(self._pending_text)
-                            self._stream_played_seconds += self._play_duration
-                        self._pending_text = ""
-            else:
-                # Clear playback state when audio finishes or stop is requested.
-                def _wait_done() -> None:
-                    try:
-                        while not self._stop_event.wait(timeout=0.02):
-                            try:
-                                if not sd.get_stream().active:
-                                    break
-                            except Exception:
-                                break
-                    finally:
-                        with self._playback_lock:
-                            if generation == self._playback_generation:
-                                self._is_playing = False
-                                self._pending_text = ""
 
-                threading.Thread(target=_wait_done, daemon=True).start()
-            return generation == self._playback_generation
+            def monitor() -> None:
+                """Reveal audio-timed characters and leave a partial caption on interruption."""
+                callback = on_progress
+                visible = 0
+
+                def emit(*, finished: bool = False, interrupted: bool = False) -> None:
+                    nonlocal visible, callback
+                    if callback is None or serial != self._playback_serial:
+                        return
+                    now = time.monotonic()
+                    if interrupted and self._play_stopped_at:
+                        now = min(now, self._play_stopped_at)
+                    elapsed = max(0.0, now - started - latency)
+                    count = (
+                        len(timeline.text) if finished and not interrupted
+                        else timeline.visible_count(elapsed)
+                    )
+                    try:
+                        while visible < count:
+                            if serial != self._playback_serial:
+                                return
+                            if not interrupted and (
+                                generation != self._playback_generation
+                                or (cancel_event is not None and cancel_event.is_set())
+                            ):
+                                return
+                            visible += 1
+                            callback(timeline.text[:visible], False, False)
+                        if finished and serial == self._playback_serial:
+                            callback(timeline.text[:visible], True, interrupted)
+                    except Exception as err:
+                        logger.warning("Speech caption output failed: %s", err)
+                        callback = None
+
+                interrupted = False
+                try:
+                    # Poll instead of sd.wait(), which can stall after Linux barge-in.
+                    while serial == self._playback_serial:
+                        if (
+                            generation != self._playback_generation or self._stop_event.is_set()
+                            or (cancel_event is not None and cancel_event.is_set())
+                        ):
+                            interrupted = True
+                            if generation == self._playback_generation:
+                                self.stop()
+                            break
+                        try:
+                            active = sd.get_stream().active
+                        except Exception:
+                            active = False
+                        if not active:
+                            break
+                        emit()
+                        self._stop_event.wait(timeout=0.01 if callback is not None else 0.02)
+                finally:
+                    emit(finished=True, interrupted=interrupted)
+                    with self._playback_lock:
+                        if (
+                            generation == self._playback_generation
+                            and serial == self._playback_serial
+                        ):
+                            self._is_playing = False
+                            if self._stream_spoken is not None:
+                                self._stream_spoken.append(self._pending_text)
+                                self._stream_played_seconds += self._play_duration
+                            self._pending_text = ""
+
+            if block:
+                monitor()
+            else:
+                threading.Thread(
+                    target=monitor, name="raphael-playback-progress", daemon=True,
+                ).start()
+            return generation == self._playback_generation and serial == self._playback_serial
         except Exception as err:
             logger.error("Error playing TTS audio: %s", err)
             self._is_playing = False
@@ -568,6 +648,7 @@ class TextToSpeech:
     def stop(self) -> dict | None:
         """Immediately stop audio playback (barge-in support)."""
         with self._playback_lock:
+            self._play_stopped_at = time.monotonic()
             interruption = None
             if self._pending_text or self._stream_text:
                 elapsed = (

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.6 — 2026-10-04 (development)
+
+- Reveal AI captions letter by letter during playback, using native Piper audio
+  alignments for word spans and interpolating letters within those spans. Include
+  the output device's reported latency, and freeze partial captions on barge-in.
+- Coordinate caption redraws with console logs. Preserve terminal width, secret
+  masking, normal log formatting, and plain final snapshots for redirected output.
+- Enable Piper's alignment dependency and patch voices in memory. Preserve model
+  files and public synthesis results; unsupported timing uses a duration estimate.
+- Keep complete replies out of INFO logs ahead of live captions, and display a
+  plain text fallback when speech fails before any visible playback progress.
+
 ## 0.3.5 — 2026-10-04 (development)
 
 - Add live AI speech transcripts at playback start, showing each streaming

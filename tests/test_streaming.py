@@ -2,6 +2,7 @@
 
 import threading
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
@@ -111,6 +112,70 @@ def test_sentence_callback_arrives_at_playback_before_generation_finishes(speech
     assert observed == ["First sentence.", "Second sentence."]
     assert result.spoken and not result.canceled
     assert generation_finished.is_set()
+
+
+def test_stream_forwards_playback_prefixes_without_revealing_sentence_end():
+    tts = MagicMock()
+    starts, progress = [], []
+
+    def speak(text, **controls):
+        controls['on_start']()
+        assert starts[-1] == text
+        callback = controls['on_progress']
+        callback(text[:1], False, False)
+        callback(text[:5], False, False)
+        callback(text, True, False)
+        return True
+
+    tts.speak.side_effect = speak
+    router = SimpleNamespace(stream=lambda *a, **k: iter([chunk('First sentence. Second. ')]))
+    result = stream_reply(
+        router, [], tts, lambda: True, on_sentence_start=starts.append,
+        on_progress=lambda text, done, stopped: progress.append((text, done, stopped)),
+    )
+    assert starts == ['First sentence.', 'Second.']
+    assert progress == [
+        ('F', False, False), ('First', False, False), ('First sentence.', True, False),
+        ('S', False, False), ('Secon', False, False), ('Second.', True, False),
+    ]
+    assert result.spoken
+
+
+def test_stream_finalizes_interrupted_prefix_and_suppresses_stale_progress():
+    tts = MagicMock()
+    cancel = threading.Event()
+    progress = []
+
+    def speak(_text, **controls):
+        controls['on_start']()
+        controls['on_progress']('First', False, False)
+        cancel.set()
+        controls['on_progress']('First sentence.', False, False)
+        controls['on_progress']('First', True, True)
+        return False
+
+    tts.speak.side_effect = speak
+    router = SimpleNamespace(stream=lambda *a, **k: iter([chunk('First sentence. Second. ')]))
+    result = stream_reply(
+        router, [], tts, lambda: not cancel.is_set(), cancel_event=cancel,
+        on_progress=lambda text, done, stopped: progress.append((text, done, stopped)),
+    )
+    assert result.canceled
+    assert progress == [('First', False, False), ('First', True, True)]
+    tts.speak.assert_called_once()
+
+
+def test_stream_does_not_install_progress_callback_when_captions_are_disabled():
+    tts = MagicMock()
+
+    def speak(_text, **controls):
+        assert 'on_progress' not in controls
+        controls['on_start']()
+        return True
+
+    tts.speak.side_effect = speak
+    router = SimpleNamespace(stream=lambda *a, **k: iter([chunk('Hello.')]))
+    assert stream_reply(router, [], tts, lambda: True).spoken
 
 
 @pytest.mark.parametrize("cancel_sentence", ["First.", "Second."])

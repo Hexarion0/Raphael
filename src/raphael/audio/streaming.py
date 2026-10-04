@@ -115,6 +115,7 @@ def stream_reply(
     max_tokens: int = 400,
     cancel_event: threading.Event | None = None,
     on_sentence_start: Callable[[str], None] | None = None,
+    on_progress: Callable[[str, bool, bool], None] | None = None,
 ) -> StreamedReply:
     """Read tokens concurrently with playback and return promptly on interruption.
 
@@ -187,9 +188,17 @@ def stream_reply(
         for part in parts:
             if not current():
                 return
+            controls = {}
+            if on_progress is not None:
+                def progress(visible: str, finished: bool, interrupted: bool) -> None:
+                    if current() or finished or interrupted:
+                        on_progress(visible, finished, interrupted)
+
+                controls["on_progress"] = progress
             played = tts.speak(
                 part, block=True, cancel_event=cancel_event or halted, generation=generation,
                 on_start=lambda sentence=part: audio_started(sentence),
+                **controls,
             )
             result.spoken |= bool(played)
 

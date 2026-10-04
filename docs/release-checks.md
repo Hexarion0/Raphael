@@ -87,17 +87,41 @@ and private audio out of reports.
     history while spoken output omits the code block. Disconnect after a sentence
     starts: expect a connection-cutoff notice, without a fallback answer being
     appended to the partially spoken reply.
-    With `SHOW_AI_TRANSCRIPTS=true`, verify a `RAPHAEL (speaking)` line appears
-    when each sentence starts, rather than after the full reply. A canceled
-    sentence that never plays must not appear. Check the local clock answer and
-    greeting as well. Test both CLI overrides and batch TTS; final history must
-    still contain only one assistant reply. Captions show intended TTS text,
-    including the whole current sentence if it is interrupted mid-playback.
+    With `SHOW_AI_TRANSCRIPTS=true`, verify `RAPHAEL: ` reveals letters at the
+    spoken pace in the terminal. A canceled sentence that never plays must not
+    appear. During barge-in, expect only the reached prefix plus `[interrupted]`.
+    Check the local clock answer and greeting, both CLI overrides, batch TTS,
+    and two voice speeds. Ordinary logs must appear without breaking the caption
+    line. Redirect output to a file and expect final/partial snapshots without
+    terminal escapes or per-letter lines. Final history must still contain one
+    assistant reply. Native word spans drive letter interpolation; spelling and
+    phonemes are not the same, so assess remaining drift on the actual headset.
 11. While voice training is running, ask a short unclear question that triggers
     STT retry. Below `STT_RETRY_MIN_FREE_MB`, expect a primary-model retry without
     allocating `medium.en`. After training releases VRAM, a stronger retry can be
     used again and its temporary CUDA model must be released afterward. Record
     GPU memory and transcript quality; this does not prove hum rejection by itself.
+
+## Recorded validation — 2026-10-04 (v0.3.6 patch)
+
+- 567 unit tests passed; three integrations excluded. Ruff, whitespace checks,
+  CLI version, and wheel build passed. The wheel includes caption/alignment
+  modules and declares Piper's alignment dependency.
+- Native timing was checked offline on the installed custom voice and Amy with
+  contractions, multiple sentences, `5:32 AM`, and `88°C`. Phoneme durations
+  summed exactly to each generated waveform, and original-text character
+  schedules were monotonic and bounded by that same audio. No audio was played.
+- Playback tests cover reported output latency, character ordering, stop-time
+  partial captions, failed/canceled synthesis, replaced playback, and a broken
+  caption writer. Renderer tests cover TTY redraws, narrow terminals, plain
+  redirected output, secret masking, and coordinated log restoration.
+- CLI tests confirm captions do not reveal complete local/batch replies ahead
+  of audio, text-only failure fallback remains visible, normal INFO logs remain
+  with captions disabled, and assistant history is saved once.
+- The installed custom ONNX checksum is unchanged. Native alignments are exposed
+  in memory without modifying model files or adding another neural inference.
+  Live headset synchronization remains to be checked; letters interpolate inside
+  measured word spans, and uncertain mappings use a duration estimate.
 
 ## Recorded validation — 2026-10-04 (v0.3.5 patch)
 

@@ -2,7 +2,7 @@
 
 > A JARVIS-style, always-listening desktop AI assistant — its own voice, multi-provider AI routing, memory, and messaging integration, built one feature at a time.
 
-**Status:** v0.3.5 development — persistent memory and streamed voice conversations.
+**Status:** v0.3.6 development — persistent memory and streamed voice conversations.
 Live microphone acceptance remains in [`docs/release-checks.md`](docs/release-checks.md).
 
 ---
@@ -202,17 +202,27 @@ the recognized words at INFO level, including rejected ambient speech. Set
 `SHOW_TRANSCRIPTS=true` in `.env` to make this the default, or override it for a run
 with `--no-show-transcripts`. Recognizable but low-confidence
 direct speech can prompt a repeat without executing or saving the uncertain text.
-Set `SHOW_AI_TRANSCRIPTS=true` to display intended speech as each AI sentence
-starts playing, including local greetings and clock answers. For a single run,
-use `--show-ai-transcripts` or `--no-show-ai-transcripts` to override this setting.
-For example, while the sentence plays the terminal shows
-`RAPHAEL (speaking): "What's on your mind?"`.
-These are sentence-level captions from the text sent to TTS; they cannot detect
-mispronounced words or indicate the exact word reached during an interruption.
-Canceled sentences that never start playing are omitted. Batch TTS displays the
-whole reply when playback starts. The complete response is still logged after
-playback and saved once in conversation history. This setting is independent of
-`SHOW_TRANSCRIPTS`, which displays recognized microphone speech.
+Set `SHOW_AI_TRANSCRIPTS=true` for captions that reveal letters as the voice
+plays, including local greetings and clock answers. For a single run, use
+`--show-ai-transcripts` or `--no-show-ai-transcripts` to override this setting.
+The terminal updates a `RAPHAEL: ` line while the sentence is spoken. Ordinary
+logs appear above it, and interruptions leave only the reached prefix.
+[Piper's native phoneme/audio alignments](https://github.com/OHF-Voice/piper1-gpl/blob/main/docs/ALIGNMENTS.md)
+provide spoken-word timing from the same generated waveform; letters are
+interpolated within each word's audio span. The playback cursor accounts for the
+output device's reported latency. This follows the spoken pace, including speed
+changes, without a separate fixed typing rate. Spelling is not a direct map to
+sounds, so individual letters remain approximate. Unsupported timing or uncertain
+text normalization falls back to an estimate based on the audio duration.
+Piper's alignment dependency is included in normal installation; voices are
+patched in memory, leaving downloaded and custom model files unchanged.
+Both streaming and batch TTS use progressive captions. Redirected output writes
+only a final or interrupted snapshot, avoiding control sequences and letter spam.
+Captions show intended TTS text; they do not detect a model's mispronunciation.
+Complete responses remain at DEBUG level while live captions are enabled and
+are saved once in conversation history. If audio fails before any caption
+progress, the intended response appears as a plain text fallback.
+`SHOW_TRANSCRIPTS` separately displays recognized microphone speech.
 Bare wake phrases meeting the acceptance threshold skip the larger quality retry.
 If a quality retry runs out of memory, its cached model is released and further
 quality retries on that device are disabled for this process. Primary transcription
