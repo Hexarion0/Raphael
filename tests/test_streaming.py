@@ -264,6 +264,7 @@ def test_canceled_synthesis_does_not_report_canceled_or_queued_sentences(
 ):
     tts, played = speech
     entered, release, cancel, finished, synthesized = (threading.Event() for _ in range(5))
+    first_started = threading.Event()
     observed, results = [], []
 
     def synthesize(text):
@@ -278,10 +279,15 @@ def test_canceled_synthesis_does_not_report_canceled_or_queued_sentences(
     monkeypatch.setattr(tts, "synthesize", synthesize)
     router = SimpleNamespace(stream=lambda *a, **k: iter([chunk("First. Second. Third. ")]))
 
+    def on_sentence_start(text):
+        observed.append(text)
+        if text == "First.":
+            first_started.set()
+
     def run():
         results.append(stream_reply(
             router, [], tts, lambda: not cancel.is_set(), cancel_event=cancel,
-            on_sentence_start=observed.append,
+            on_sentence_start=on_sentence_start,
         ))
         finished.set()
 
@@ -289,6 +295,8 @@ def test_canceled_synthesis_does_not_report_canceled_or_queued_sentences(
     worker.start()
     try:
         assert entered.wait(1)
+        if cancel_sentence == "Second.":
+            assert first_started.wait(1)
         cancel.set()
         tts.stop()
         assert finished.wait(0.5), "Canceled synthesis delayed the new utterance"
