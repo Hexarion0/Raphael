@@ -123,7 +123,18 @@ def install_compact_predictor(predictor) -> None:
 
 def install_stable_fp16(talker) -> list[str]:
     """Experiment: FP16 talker with FP32 gated products/down projections in predictor."""
+    import torch
+
+    # Match pretrained dtype loading: keep native FP32 rotary buffers intact.
+    full_precision_buffers = [
+        (module, name, value)
+        for module in talker.modules()
+        for name, value in module.named_buffers(recurse=False)
+        if value.dtype == torch.float32
+    ]
     talker.half()
+    for module, name, value in full_precision_buffers:
+        module._buffers[name] = value
     changed = []
     for name, module in talker.named_modules():
         if not name.startswith("code_predictor.") or not hasattr(module, "gate_proj"):
@@ -292,6 +303,9 @@ def main() -> None:
     parser.add_argument("--label", required=True)
     parser.add_argument("--attention", choices=["sdpa", "eager"], default="sdpa")
     parser.add_argument(
+        "--codec-precision", choices=["bfloat16", "float32", "float16"], default="bfloat16"
+    )
+    parser.add_argument(
         "--precision", choices=["bfloat16", "mixed", "float32-talker"], default="bfloat16"
     )
     parser.add_argument("--predictor", choices=["stock", "compact", "graph"], default="stock")
@@ -304,8 +318,9 @@ def main() -> None:
     parser.add_argument("--temperature", type=float, default=0.9)
     parser.add_argument("--paced-sink", action="store_true")
     parser.add_argument("--prompt-cache", type=Path)
+    parser.add_argument("--min-code-frames", type=int, default=2)
     args = parser.parse_args()
-    if args.repeats < 1 or args.stream_frames < 0:
+    if args.repeats < 1 or args.stream_frames < 0 or args.min_code_frames < 2:
         parser.error("Invalid repetition/chunk count")
     if args.output.exists():
         parser.error("Output already exists; never overwrite previous benchmark evidence")
@@ -398,10 +413,24 @@ def main() -> None:
             summary["fp32_predictor_mlp_modules"] = install_stable_fp16(model.model.talker)
         elif args.precision == "float32-talker":
             model.model.talker.float()
+        # Stock BF16 loading intentionally retains FP32 rotary buffers. A redundant
+        # .to(bfloat16) would round those buffers and silently change the waveform.
+        if args.codec_precision != "bfloat16":
+            model.model.speech_tokenizer.model.decoder.to(getattr(torch, args.codec_precision))
         if args.predictor == "compact":
             install_compact_predictor(model.model.talker.code_predictor)
         elif args.predictor == "graph":
             install_graph_predictor(model.model.talker.code_predictor, summary)
+        if args.min_code_frames != 2:
+            # The public wrapper hardcodes two frames. This experiment changes the
+            # native HF talker's EOS suppression, with a separate listening column.
+            talker_generate = model.model.talker.generate
+
+            def minimum_frames(*inputs, **kwargs):
+                kwargs["min_new_tokens"] = args.min_code_frames
+                return talker_generate(*inputs, **kwargs)
+
+            model.model.talker.generate = minimum_frames
         if args.offload_encoders:
             model.model.speaker_encoder.cpu()
             model.model.speech_tokenizer.model.encoder.cpu()
@@ -547,6 +576,9 @@ def main() -> None:
                 row["stream_codes_equal_final"] = np.array_equal(
                     torch.stack(streamer.codes).cpu().numpy(), captured[0]
                 )
+            if paced is not None:
+                row["synthesis_start_clock_seconds"] = started - paced.origin
+                row["synthesis_end_clock_seconds"] = started + elapsed - paced.origin
             rows.append(row)
             write_json(args.output / "measurements.json", rows)
             print(

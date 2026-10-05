@@ -23,6 +23,8 @@ def test_numeric_spelling_normalization_does_not_hide_different_numbers():
     assert assess.word_distance(assess.tokens("63 degrees"), assess.tokens("62 degrees")) > 0
     assert assess.tokens("9:30 AM workstation") == assess.tokens("9.30am work station")
     assert assess.tokens("9 30 a.m.") == assess.tokens("nine thirty a m")
+    assert assess.tokens("Alright, you win.") == assess.tokens("All right, you win.")
+    assert assess.word_distance(assess.tokens("All right, you win."), assess.tokens("Oh.")) > 0
 
 
 def test_edit_distance_preserves_omitted_and_extra_words():

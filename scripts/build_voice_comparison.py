@@ -6,6 +6,7 @@ import argparse
 import html
 import json
 import os
+import statistics
 from pathlib import Path
 
 LABELS = {
@@ -44,6 +45,7 @@ def main() -> None:
     parser.add_argument("directories", nargs="+", type=Path)
     parser.add_argument("--references", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--only-ids", nargs="+")
     args = parser.parse_args()
     output = args.output
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -53,6 +55,10 @@ def main() -> None:
         rows = json.loads((directory / "measurements.json").read_text())
         checks = directory / "word_checks.json"
         checked = {r["audio"]: r for r in json.loads(checks.read_text())} if checks.exists() else {}
+        secondary = directory / "word_checks-medium.json"
+        if secondary.exists():
+            for result in json.loads(secondary.read_text()):
+                checked.setdefault(result["audio"], {})["secondary_observed"] = result["observed"]
         for encoder in ["chatterbox", "campplus"]:
             similarity = directory / f"similarity-{encoder}.json"
             if similarity.exists():
@@ -105,8 +111,8 @@ excluding playback. ASR checks are fallible.</p>
         )
     parts.append(
         '<h2>Measured performance</h2><div class="scroll"><table><tr><th>Model</th>'
-        "<th>Load / reference cache</th><th>Median warm audio ready / RTF</th>"
-        "<th>Peak process VRAM / RAM</th><th>Output API / stability</th></tr>"
+        "<th>Load / reference cache</th><th>Median warm first audio / total / RTF</th>"
+        "<th>Peak process VRAM / whole GPU / RAM</th><th>Output API / stability</th></tr>"
     )
     for _, summary, rows, _ in models:
         warm = [r for r in rows if r["phase"] == "warm"]
@@ -116,8 +122,10 @@ excluding playback. ASR checks are fallible.</p>
             f"{summary.get('model_load_seconds', 0):.2f}s / "
             f"{summary.get('conditioning_seconds', 0):.2f}s</td><td>"
             f"{summary.get('warm_median_audio_ready_seconds', 0):.2f}s / "
+            f"{statistics.median(r['generation_seconds'] for r in warm) if warm else 0:.2f}s / "
             f"{summary.get('warm_median_rtf', 0):.3f}</td><td>"
             f"{summary.get('sampled_process_vram_mib', 0):.0f} MiB / "
+            f"{summary.get('sampled_whole_gpu_mib', 0):.0f} MiB / "
             f"{summary.get('peak_rss_mib', 0):.0f} MiB</td><td>"
             f"{html.escape(summary.get('streaming', 'unknown'))}<br>{len(warm)} warm requests; "
             f"{html.escape(str(summary['errors']))}</td></tr>"
@@ -157,14 +165,24 @@ excluding playback. ASR checks are fallible.</p>
     )
     for _, summary, _, _ in models:
         reference_name = Path(summary.get("reference_path", "reference-1.wav")).name
+        settings = summary.get("generation_config") or {
+            key: value
+            for key, value in summary.get("experiment_settings", {}).items()
+            if key in {"temperature", "non_streaming_mode", "min_code_frames", "stream_frames"}
+        }
         parts.append(
             f"<th>{html.escape(display_name(summary))}"
-            f"<small>{html.escape(json.dumps(summary.get('generation_config', {})))}</small>"
+            f"<small>{html.escape(json.dumps(settings))}</small>"
             f"<small>Reference: {html.escape(reference_name)}"
             "</small></th>"
         )
     parts.append("</tr>")
     suite = {r["id"]: r.get("spoken_text", r["text"]) for _, _, rows, _ in models for r in rows}
+    if args.only_ids:
+        missing = set(args.only_ids) - suite.keys()
+        if missing:
+            parser.error(f"Unknown sentence IDs: {sorted(missing)}")
+        suite = {key: value for key, value in suite.items() if key in args.only_ids}
     for sentence_id, text in suite.items():
         parts.append(f"<tr><td><b>{html.escape(sentence_id)}</b><p>{html.escape(text)}</p></td>")
         for directory, summary, rows, checks in models:
@@ -212,6 +230,11 @@ excluding playback. ASR checks are fallible.</p>
                                 f"<small>Take {take['repeat']}: "
                                 f"{html.escape(check['observed'])}</small>"
                             )
+                            if "secondary_observed" in check:
+                                parts.append(
+                                    "<small>Second ASR: "
+                                    f"{html.escape(check['secondary_observed'])}</small>"
+                                )
                         if check:
                             for encoder in ["chatterbox", "campplus"]:
                                 if encoder in check:

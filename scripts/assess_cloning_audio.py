@@ -22,6 +22,7 @@ def tokens(text: str) -> list[str]:
         text,
     )
     text = re.sub(r"\bwork\s+station\b", "workstation", text)
+    text = re.sub(r"\balright\b", "all right", text)
     for old, new in {
         "63": "sixty three",
         "4.2": "four point two",
@@ -60,14 +61,17 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("directories", nargs="+", type=Path)
     parser.add_argument("--asr-model", type=Path, required=True)
+    parser.add_argument("--checks-name", default="word_checks.json")
     args = parser.parse_args()
+    if Path(args.checks_name).name != args.checks_name or not args.checks_name.endswith(".json"):
+        parser.error("--checks-name must be a JSON filename within each benchmark directory")
     _preload_cuda_libraries()
     model = WhisperModel(
         str(args.asr_model), device="cuda", compute_type="int8_float16", local_files_only=True
     )
     for directory in args.directories:
         measurements = json.loads((directory / "measurements.json").read_text())
-        destination = directory / "word_checks.json"
+        destination = directory / args.checks_name
         existing = json.loads(destination.read_text()) if destination.exists() else []
         completed = {r["audio"] for r in existing}
         for row in measurements:
