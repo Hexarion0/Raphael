@@ -7,7 +7,14 @@ Open the local listening page:
 
 `data/voice/benchmarks/emotion-controls/index.html`
 
-It contains 180 new listening takes and links to all 25 previous Qwen baseline takes, plus
+**Follow-up:** [Turbo tag display diagnosis and corrected comparisons](turbo-tag-diagnosis.md).
+The earlier tag run succeeded, but only scheduled sentences 09–15; the page mislabeled the
+other eight empty cells as failures. Nine additional outputs now fill those comparisons,
+and the main documented-event column covers all 15 texts. Reserved style-token probes are
+archived separately. Current active documented-tag results include three ASR word disagreements
+in the new baseline run; the zero-disagreement claim below describes the earlier emotion/tag runs.
+
+The initial experiment contained 180 new listening takes and links to all 25 previous Qwen baseline takes, plus
 the four source references. One additional original-model smoke-test WAV is retained outside
 the comparison. Nothing was selected after listening to make a model look better.
 

@@ -317,6 +317,7 @@ def main() -> None:
             "Less than 3.5 GiB free; defer GPU loading until other jobs release memory"
         )
     args.output.mkdir(parents=True, exist_ok=False)
+    suite = json.loads(args.suite.read_text())
     summary = {
         **hardware,
         "candidate": args.candidate,
@@ -324,6 +325,9 @@ def main() -> None:
         "reference_sha256": file_hash(args.reference),
         "reference_text_sha256": file_hash(args.reference_text),
         "suite_sha256": file_hash(args.suite),
+        "suite_path": str(args.suite.resolve()),
+        "planned_sentence_ids": [item["id"] for item in suite],
+        "planned_warm_repeats": 0 if args.smoke_only else args.repeats,
         "errors": [],
         "playback_measured": False,
         "training": False,
@@ -380,7 +384,6 @@ def main() -> None:
         import numpy as np
         import soundfile as sf
 
-        suite = json.loads(args.suite.read_text())
         requests = [("first_inference", suite[0], 0)]
         if not args.smoke_only:
             requests += [

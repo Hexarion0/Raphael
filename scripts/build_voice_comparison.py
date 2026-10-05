@@ -21,6 +21,18 @@ def display_name(summary: dict) -> str:
     return summary.get("display_name") or LABELS.get(summary["candidate"], summary["candidate"])
 
 
+def missing_sample_message(summary: dict, sentence_id: str) -> str:
+    """Never describe an unplanned or unknown comparison as a generation failure."""
+    planned = summary.get("planned_sentence_ids")
+    if planned is not None and sentence_id not in planned:
+        return "Not scheduled for this run."
+    if summary.get("errors"):
+        return "No completed sample. See recorded errors above."
+    if planned is not None:
+        return "Scheduled sample missing; run incomplete."
+    return "No sample recorded for this sentence in this run."
+
+
 def relative(path: Path, output: Path) -> str:
     """Make media links portable together with their parent experiment directory."""
     return html.escape(os.path.relpath(path.resolve(), output.parent.resolve()), quote=True)
@@ -208,7 +220,7 @@ excluding playback. ASR checks are fallible.</p>
                     'aria-label="Listening notes">'
                 )
             else:
-                parts.append("No completed warm sample. See recorded errors above.")
+                parts.append(missing_sample_message(summary, sentence_id))
             parts.append("</td>")
         parts.append("</tr>")
     parts.append("""</table></div><script>

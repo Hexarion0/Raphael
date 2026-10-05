@@ -130,3 +130,33 @@ def test_profiles_keep_unique_notes_and_show_tagged_input(tmp_path, monkeypatch)
     assert "Actual input: [chuckle] Hello." in page
     assert "Reference: neutral.wav" in page
     assert "Reference: tagged.wav" in page
+
+
+def test_unplanned_and_missing_samples_are_not_reported_as_inference_errors():
+    script = load_script("build_voice_comparison")
+    summary = {"planned_sentence_ids": ["emotion"], "errors": []}
+    assert script.missing_sample_message(summary, "baseline") == "Not scheduled for this run."
+    assert "incomplete" in script.missing_sample_message(summary, "emotion")
+    assert "errors" not in script.missing_sample_message({"errors": []}, "baseline")
+    failed = {"planned_sentence_ids": ["emotion"], "errors": ["CUDA out of memory"]}
+    assert "errors" in script.missing_sample_message(failed, "emotion")
+    assert "errors" not in script.missing_sample_message(failed, "baseline")
+
+
+def test_supported_tag_baseline_preserves_spoken_words_and_rejects_unverified_tags():
+    import re
+
+    script = load_script("benchmark_turbo_supported_tags")
+    baseline = json.loads((SCRIPTS.parent / "docs/voice-evaluation.json").read_text())
+    allowed = {"[sigh]", "[chuckle]", "[gasp]"}
+    native = {tag: index for index, tag in enumerate(sorted(allowed))}
+    rows = script.baseline_tag_suite(baseline, allowed, native)
+    assert [r["id"] for r in rows] == [r["id"] for r in baseline]
+    for row, original in zip(rows, baseline):
+        assert row["spoken_text"] == original["text"]
+        assert re.sub(r"\[[^]]+\]\s*", "", row["text"]) == original["text"]
+        assert set(re.findall(r"\[[^]]+\]", row["text"])) <= allowed
+    import pytest
+
+    with pytest.raises(ValueError, match="Not a documented native Turbo event"):
+        script.baseline_tag_suite(baseline, {"[sigh]"}, native)
