@@ -62,12 +62,16 @@ def main() -> None:
     parser.add_argument("directories", nargs="+", type=Path)
     parser.add_argument("--asr-model", type=Path, required=True)
     parser.add_argument("--checks-name", default="word_checks.json")
+    parser.add_argument("--device", choices=["cuda", "cpu"], default="cuda")
     args = parser.parse_args()
     if Path(args.checks_name).name != args.checks_name or not args.checks_name.endswith(".json"):
         parser.error("--checks-name must be a JSON filename within each benchmark directory")
-    _preload_cuda_libraries()
+    if args.device == "cuda":
+        _preload_cuda_libraries()
     model = WhisperModel(
-        str(args.asr_model), device="cuda", compute_type="int8_float16", local_files_only=True
+        str(args.asr_model), device=args.device,
+        compute_type="int8_float16" if args.device == "cuda" else "int8",
+        local_files_only=True, cpu_threads=4,
     )
     for directory in args.directories:
         measurements = json.loads((directory / "measurements.json").read_text())
@@ -112,6 +116,7 @@ def main() -> None:
                 {
                     "audio": row["audio"],
                     "asr_model": str(args.asr_model),
+                    "asr_device": args.device,
                     "expected": spoken_text,
                     "input_text": row["text"],
                     "observed": transcript,
