@@ -9,10 +9,16 @@ import os
 from pathlib import Path
 
 LABELS = {
+    "chatterbox500": "Chatterbox original English 500M",
     "chatterbox-turbo": "Chatterbox Turbo",
     "cosyvoice3": "CosyVoice3 0.5B",
     "qwen06": "Qwen3-TTS 0.6B Base",
 }
+
+
+def display_name(summary: dict) -> str:
+    """Distinguish multiple profiles of the same model in the listening interface."""
+    return summary.get("display_name") or LABELS.get(summary["candidate"], summary["candidate"])
 
 
 def relative(path: Path, output: Path) -> str:
@@ -93,7 +99,7 @@ excluding playback. ASR checks are fallible.</p>
     for _, summary, rows, _ in models:
         warm = [r for r in rows if r["phase"] == "warm"]
         parts.append(
-            f"<tr><td>{html.escape(LABELS.get(summary['candidate'], summary['candidate']))}"
+            f"<tr><td>{html.escape(display_name(summary))}"
             f"<small>{html.escape(summary.get('precision', ''))}</small></td><td>"
             f"{summary.get('model_load_seconds', 0):.2f}s / "
             f"{summary.get('conditioning_seconds', 0):.2f}s</td><td>"
@@ -123,21 +129,25 @@ excluding playback. ASR checks are fallible.</p>
                 )
             parts.append("</ul>")
     parts.append(
-        "<h2>Same sentences, same primary reference</h2>"
+        "<h2>Compare delivery · reference and input changes are labeled</h2>"
         '<div class="scroll"><table><tr><th>Sentence</th>'
     )
     for _, summary, _, _ in models:
+        reference_name = Path(summary.get("reference_path", "reference-1.wav")).name
         parts.append(
-            f"<th>{html.escape(LABELS.get(summary['candidate'], summary['candidate']))}</th>"
+            f"<th>{html.escape(display_name(summary))}"
+            f"<small>{html.escape(json.dumps(summary.get('generation_config', {})))}</small>"
+            f"<small>Reference: {html.escape(reference_name)}"
+            "</small></th>"
         )
     parts.append("</tr>")
-    suite = {r["id"]: r["text"] for _, _, rows, _ in models for r in rows}
+    suite = {r["id"]: r.get("spoken_text", r["text"]) for _, _, rows, _ in models for r in rows}
     for sentence_id, text in suite.items():
         parts.append(f"<tr><td><b>{html.escape(sentence_id)}</b><p>{html.escape(text)}</p></td>")
         for directory, summary, rows, checks in models:
             takes = [r for r in rows if r["id"] == sentence_id and r["phase"] == "warm"]
             takes += [r for r in rows if r["id"] == sentence_id and r["phase"] == "first_inference"]
-            key = summary["candidate"] + "-" + sentence_id
+            key = directory.name + "-" + sentence_id
             parts.append("<td>")
             if takes:
                 parts.append('<select aria-label="Take" onchange="changeTake(this)">')
@@ -162,6 +172,8 @@ excluding playback. ASR checks are fallible.</p>
                         f"{html.escape(label)}</option>"
                     )
                 first = takes[0]
+                if first["text"] != text:
+                    parts.append(f"<small>Actual input: {html.escape(first['text'])}</small>")
                 parts.append(
                     f'</select><audio controls preload="none" src="'
                     f'{relative(directory / first["audio"], output)}"></audio>'

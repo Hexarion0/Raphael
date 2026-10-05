@@ -106,6 +106,20 @@ def load_adapter(args):
     """Load only local files and expose waveform chunks with cached conditioning."""
     import torch
 
+    if args.candidate == "chatterbox500":
+        from chatterbox.tts import ChatterboxTTS
+
+        model = ChatterboxTTS.from_local(args.model, device="cuda")
+
+        def condition():
+            model.prepare_conditionals(
+                str(args.reference), exaggeration=args.generation.get("exaggeration", 0.5)
+            )
+
+        def generate(text):
+            yield model.generate(text, **args.generation)
+
+        return model.sr, condition, generate, model, "complete-waveform API", "float32"
     if args.candidate.startswith("chatterbox"):
         from chatterbox.tts_turbo import ChatterboxTurboTTS
 
@@ -119,7 +133,7 @@ def load_adapter(args):
             model.prepare_conditionals(str(args.reference), exaggeration=0.0)
 
         def generate(text):
-            yield model.generate(text)
+            yield model.generate(text, **args.generation)
 
         return model.sr, condition, generate, model, "complete-waveform API", "float32"
     if args.candidate == "cosyvoice3":
@@ -228,7 +242,8 @@ def main() -> None:
     """Record hardware compatibility, loading, conditioning and repeated warm requests."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--candidate", choices=["chatterbox-turbo", "chatterbox-nano", "cosyvoice3", "qwen06"]
+        "--candidate",
+        choices=["chatterbox500", "chatterbox-turbo", "chatterbox-nano", "cosyvoice3", "qwen06"],
     )
     parser.add_argument("--model", type=Path)
     parser.add_argument("--vendor", type=Path)
@@ -240,10 +255,20 @@ def main() -> None:
     parser.add_argument("--preflight", action="store_true")
     parser.add_argument("--smoke-only", action="store_true")
     parser.add_argument("--request-timeout", type=int, default=120)
+    parser.add_argument("--generation-config", type=Path)
+    parser.add_argument("--label", help="Human-readable experiment label")
     parser.add_argument(
         "--qwen-precision", choices=["float16", "bfloat16", "float32"], default="bfloat16"
     )
     args = parser.parse_args()
+    args.generation = (
+        json.loads(args.generation_config.read_text()) if args.generation_config else {}
+    )
+    if args.candidate in {"chatterbox-turbo", "chatterbox-nano"}:
+        if set(args.generation) & {"exaggeration", "cfg_weight", "min_p"}:
+            parser.error("Turbo ignores exaggeration, cfg_weight and min_p; do not benchmark them")
+    elif args.generation and args.candidate != "chatterbox500":
+        parser.error("Generation overrides are implemented only for Chatterbox")
     sys.addaudithook(deny_network)
     import torch
 
@@ -302,6 +327,9 @@ def main() -> None:
         "errors": [],
         "playback_measured": False,
         "training": False,
+        "display_name": args.label or args.candidate,
+        "generation_config": args.generation,
+        "reference_path": str(args.reference.resolve()),
     }
     inventory = args.model / "inventory.json"
     if inventory.exists():
@@ -395,6 +423,9 @@ def main() -> None:
                 "phase": phase,
                 "id": item["id"],
                 "text": item["text"],
+                "spoken_text": item.get("spoken_text", item["text"]),
+                "category": item.get("category", ""),
+                "generation_config": args.generation,
                 "seed": seed,
                 "repeat": repeat,
                 "audio": name,

@@ -8,6 +8,10 @@ import json
 from pathlib import Path
 
 CANDIDATES = {
+    "chatterbox500": (
+        "ResembleAI/chatterbox",
+        ["t3_cfg.safetensors", "s3gen.safetensors", "ve.safetensors", "tokenizer.json"],
+    ),
     "chatterbox-turbo": (
         "ResembleAI/chatterbox-turbo",
         [

@@ -101,13 +101,15 @@ def main() -> None:
             )
             segments = list(iterator)
             transcript = " ".join(s.text.strip() for s in segments)
-            expected, observed = tokens(row["text"]), tokens(transcript)
+            spoken_text = row.get("spoken_text", row["text"])
+            expected, observed = tokens(spoken_text), tokens(transcript)
             edits = word_distance(expected, observed)
             existing.append(
                 {
                     "audio": row["audio"],
                     "asr_model": str(args.asr_model),
-                    "expected": row["text"],
+                    "expected": spoken_text,
+                    "input_text": row["text"],
                     "observed": transcript,
                     "word_edits": edits,
                     "expected_word_count": len(expected),

@@ -97,3 +97,36 @@ def test_comparison_keeps_all_takes_and_escapes_transcript(tmp_path, monkeypatch
     assert "&lt;script&gt;untrusted&lt;/script&gt;" in page
     assert "<script>untrusted</script>" not in page
     assert "&lt;script&gt;source&lt;/script&gt;" in page
+
+
+def test_profiles_keep_unique_notes_and_show_tagged_input(tmp_path, monkeypatch):
+    script = load_script("build_voice_comparison")
+    directories = []
+    for profile, text in [("neutral", "Hello."), ("tagged", "[chuckle] Hello.")]:
+        directory = tmp_path / profile
+        directory.mkdir()
+        (directory / "summary.json").write_text(json.dumps({
+            "candidate": "chatterbox-turbo", "display_name": "Turbo " + profile,
+            "errors": [], "reference_path": str(tmp_path / (profile + ".wav")),
+        }))
+        (directory / "measurements.json").write_text(json.dumps([{
+            "id": "hello", "phase": "warm", "repeat": 1, "text": text,
+            "spoken_text": "Hello.", "audio": "hello.wav", "audio_ready_seconds": 1,
+            "generation_seconds": 1, "rtf": 0.5,
+        }]))
+        directories.append(str(directory))
+    references = tmp_path / "references.json"
+    references.write_text("[]")
+    output = tmp_path / "index.html"
+    monkeypatch.setattr(sys, "argv", [
+        "build_voice_comparison.py", *directories,
+        "--references", str(references), "--output", str(output),
+    ])
+    script.main()
+    page = output.read_text()
+    assert "Turbo neutral" in page and "Turbo tagged" in page
+    assert 'data-key="neutral-hello"' in page
+    assert 'data-key="tagged-hello"' in page
+    assert "Actual input: [chuckle] Hello." in page
+    assert "Reference: neutral.wav" in page
+    assert "Reference: tagged.wav" in page
