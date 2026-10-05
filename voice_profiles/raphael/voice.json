@@ -1,0 +1,19 @@
+{
+  "name": "raphael",
+  "engine": "chatterbox_turbo",
+  "model_revision": "749d1c1a46eb10492095d68fbcf55691ccf137cd",
+  "reference_audio": "data/voice/references/raphael/reference-1.wav",
+  "reference_transcript": "data/voice/references/raphael/reference-1.txt",
+  "fallback_voice": "en_US-raphael-medium",
+  "supported_events": [
+    "[clear throat]",
+    "[sigh]",
+    "[shush]",
+    "[cough]",
+    "[groan]",
+    "[sniff]",
+    "[gasp]",
+    "[chuckle]",
+    "[laugh]"
+  ]
+}

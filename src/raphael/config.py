@@ -128,12 +128,23 @@ class AudioConfig(BaseModel):
     utterance_pause_grace_seconds: float = Field(default=0.8, ge=0, le=3)
     tts_engine: str = Field(
         default="auto",
-        description=("TTS engine: auto (follow voice), piper, edge_tts, or fish_speech"),
+        description=(
+            "TTS engine: auto, piper, edge_tts, fish_speech, or chatterbox_turbo"
+        ),
     )
     tts_voice: str = Field(
         default="mommy",
-        description="TTS voice name (custom_voice, en_GB-alan-medium, en-US-AvaNeural, mommy)",
+        description="TTS profile or voice name (raphael, Piper model, Edge voice, or Fish)",
     )
+    tts_fallback_voice: str = Field(
+        default="en_US-raphael-medium",
+        description="Local Piper voice used when Chatterbox Turbo is unavailable",
+    )
+    tts_voice_profiles: str = Field(default="voice_profiles")
+    tts_chatterbox_model: str = Field(default="data/voice/models/chatterbox-turbo")
+    tts_chatterbox_python: str = Field(default="data/voice/envs/clone/bin/python")
+    tts_min_free_vram_mb: int = Field(default=3000, ge=0, le=6144)
+    tts_audio_queue_size: int = Field(default=2, ge=1, le=4)
     tts_speed: float = Field(
         default=1.0,
         description="Speech synthesis speed multiplier (1.0 = normal)",
@@ -245,6 +256,12 @@ class Settings(BaseSettings):
     utterance_pause_grace_seconds: float = Field(default=0.8, ge=0, le=3)
     tts_engine: str = Field(default="auto")
     tts_voice: str = Field(default="mommy")
+    tts_fallback_voice: str = Field(default="en_US-raphael-medium")
+    tts_voice_profiles: str = Field(default="voice_profiles")
+    tts_chatterbox_model: str = Field(default="data/voice/models/chatterbox-turbo")
+    tts_chatterbox_python: str = Field(default="data/voice/envs/clone/bin/python")
+    tts_min_free_vram_mb: int = Field(default=3000, ge=0, le=6144)
+    tts_audio_queue_size: int = Field(default=2, ge=1, le=4)
     tts_speed: float = Field(default=1.0)
     tts_enabled: bool = Field(default=True)
     tts_streaming: bool = Field(default=True)
@@ -332,6 +349,12 @@ class Settings(BaseSettings):
             utterance_pause_grace_seconds=self.utterance_pause_grace_seconds,
             tts_engine=self.tts_engine,
             tts_voice=self.tts_voice,
+            tts_fallback_voice=self.tts_fallback_voice,
+            tts_voice_profiles=self.tts_voice_profiles,
+            tts_chatterbox_model=self.tts_chatterbox_model,
+            tts_chatterbox_python=self.tts_chatterbox_python,
+            tts_min_free_vram_mb=self.tts_min_free_vram_mb,
+            tts_audio_queue_size=self.tts_audio_queue_size,
             tts_speed=self.tts_speed,
             tts_enabled=self.tts_enabled,
             tts_streaming=self.tts_streaming,

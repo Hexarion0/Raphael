@@ -31,6 +31,26 @@ def test_clean_text_for_speech():
     assert "Bold text" in cleaned
 
 
+def test_turbo_events_are_explicit_and_limited_to_the_pinned_native_set():
+    from raphael.audio.speech_events import (
+        SpeechEvent,
+        add_speech_event,
+        split_speech_event,
+        strip_speech_events,
+    )
+
+    plain = "You're still awake."
+    assert add_speech_event(plain, None) == plain
+    assert add_speech_event(plain, SpeechEvent.SIGH) == f"[sigh] {plain}"
+    assert split_speech_event("[chuckle] I had a feeling.") == (
+        "[chuckle]", "I had a feeling."
+    )
+    assert split_speech_event("[whisper] Speak softly.") == ("", "Speak softly.")
+    assert strip_speech_events("[chuckle] A thought. [sigh] A pause.") == (
+        "A thought.  A pause."
+    )
+
+
 def test_tts_engine_detection():
     # mommy voice auto-selects fish_speech
     tts_mommy = TextToSpeech(voice_name="mommy", enabled=False, engine="auto")
@@ -214,6 +234,70 @@ def test_engine_resolution_respects_explicit_selection(voice, engine, expected):
     from raphael.audio.tts import resolve_tts_engine
 
     assert resolve_tts_engine(voice, engine) == expected
+
+
+def test_chatterbox_backend_starts_lazily_and_falls_back_offline(monkeypatch):
+    from raphael.audio.tts import ChatterboxWorkerError, resolve_tts_engine
+
+    tts = TextToSpeech(voice_name="raphael", engine="chatterbox_turbo", enabled=True)
+    assert resolve_tts_engine("raphael", "chatterbox") == "chatterbox_turbo"
+    assert tts._chatterbox is None
+    monkeypatch.setattr(
+        tts, "_load_chatterbox_worker",
+        lambda: (_ for _ in ()).throw(ChatterboxWorkerError("model unavailable")),
+    )
+    expected = (np.ones(120, dtype=np.float32), 24000)
+    monkeypatch.setattr(tts, "_synthesize_piper_fallback", lambda _text: expected)
+    assert tts.synthesize("Of course.") == expected
+    assert tts._chatterbox_failed
+    assert tts.synthesize("[sigh] You're still awake.") == expected
+    assert tts.enabled
+
+
+def test_chatterbox_worker_preserves_virtualenv_python_symlink(tmp_path):
+    import sys
+
+    from raphael.audio.chatterbox_worker import ChatterboxTurboWorker
+
+    launcher = tmp_path / "venv" / "bin" / "python"
+    launcher.parent.mkdir(parents=True)
+    launcher.symlink_to(sys.executable)
+    worker = ChatterboxTurboWorker(
+        launcher, tmp_path / "worker.py", tmp_path / "model", tmp_path / "ref.wav", "text"
+    )
+    assert worker.python == launcher.absolute()
+    assert worker.python != launcher.resolve()
+
+
+def test_speech_event_prompt_is_optional_and_limited_to_native_events():
+    from raphael.audio.speech_events import SpeechEvent, speech_event_instruction
+
+    assert speech_event_instruction(enabled=False) == ""
+    instruction = speech_event_instruction(enabled=True)
+    assert all(event.value in instruction for event in SpeechEvent)
+    assert "Use them sparingly" in instruction
+    assert "[angry]" not in instruction
+
+
+def test_chatterbox_fallback_uses_amy_when_raphael_piper_is_missing(tmp_path, monkeypatch):
+    from raphael.audio.tts import PiperVoice
+
+    amy = tmp_path / "en_US-amy-medium.onnx"
+    amy.write_bytes(b"")
+    amy.with_suffix(".onnx.json").write_text("{}")
+    tts = TextToSpeech(
+        voice_name="raphael", engine="chatterbox_turbo", enabled=False,
+        models_dir=tmp_path, tts_fallback_voice="en_US-not-installed",
+    )
+    piper = object()
+    expected = (np.ones(100, dtype=np.float32), 22050)
+    monkeypatch.setattr(PiperVoice, "load", lambda **_kwargs: piper)
+    monkeypatch.setattr(
+        tts, "_synthesize_piper",
+        lambda _text, voice: expected if voice is piper else None,
+    )
+    assert tts._synthesize_piper_fallback("Normal speech.") == expected
+    assert tts._fallback_voice is piper
 
 
 def test_explicit_output_device_numeric_string_and_name():

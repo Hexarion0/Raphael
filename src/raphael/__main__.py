@@ -3,6 +3,7 @@
 import argparse
 import re
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -216,6 +217,7 @@ def main() -> int:
             WakeListenerLoop,
             WakeWordDetector,
         )
+        from raphael.audio.speech_events import speech_event_instruction, strip_speech_events
 
         logger.info("Initializing wake-word, TTS, and STT engines (STT loads in background)...")
         detector = WakeWordDetector(
@@ -288,7 +290,12 @@ def main() -> int:
                 prompt_settings = settings.model_copy(
                     update={"raphael_preferred_name": profile_name.metadata["value"]}
                 )
-            return generate_system_prompt(settings=prompt_settings, memories=recalled_memories)
+            prompt = generate_system_prompt(
+                settings=prompt_settings, memories=recalled_memories
+            )
+            if tts.engine == "chatterbox_turbo":
+                prompt += speech_event_instruction(enabled=True)
+            return prompt
 
         _wait_re = re.compile(
             r"^(wait|hold\s+on|hang\s+on|one\s+sec(ond)?|pause)[.?!]*$",
@@ -306,7 +313,7 @@ def main() -> int:
 
         def show_spoken_sentence(text: str) -> None:
             if captions is not None:
-                captions.start(tts.clean_text_for_speech(text))
+                captions.start(strip_speech_events(tts.clean_text_for_speech(text)))
 
         def show_speech_progress(visible: str, finished: bool, interrupted: bool) -> None:
             if captions is not None:
@@ -749,8 +756,29 @@ def main() -> int:
             from raphael.audio.captions import install_caption_logging
 
             restore_caption_logging = install_caption_logging(captions)
+        tts_warmup_thread = None
+        stop_tts_warmup = threading.Event()
         try:
             loop.start()
+            if tts.engine == "chatterbox_turbo":
+                def warm_tts_after_stt() -> None:
+                    deadline = time.monotonic() + 120
+                    while not stop_tts_warmup.is_set() and time.monotonic() < deadline:
+                        if stt.wait_ready(timeout=1):
+                            if not stop_tts_warmup.is_set():
+                                tts.warmup()
+                            return
+                    if not stop_tts_warmup.is_set():
+                        logger.warning(
+                            "STT did not become ready; deferring Turbo initialization."
+                        )
+
+                tts_warmup_thread = threading.Thread(
+                    target=warm_tts_after_stt,
+                    name="raphael-tts-warmup",
+                    daemon=True,
+                )
+                tts_warmup_thread.start()
             if ambient_enabled[0]:
                 logger.info(
                     "Ambient listening active; follow-up policy=%s, window=%.0fs.",
@@ -772,8 +800,14 @@ def main() -> int:
                 if captions is not None:
                     captions.close()
             finally:
-                if restore_caption_logging is not None:
-                    restore_caption_logging()
+                try:
+                    if restore_caption_logging is not None:
+                        restore_caption_logging()
+                finally:
+                    stop_tts_warmup.set()
+                    if tts_warmup_thread is not None:
+                        tts_warmup_thread.join(timeout=5.0)
+                    tts.close()
 
     logger.info("Ready. Use 'python -m raphael --listen' for live voice listening.")
     logger.info("Use 'python -m raphael record-samples' to record voice samples.")

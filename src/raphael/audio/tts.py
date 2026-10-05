@@ -1,6 +1,8 @@
 import argparse
 import asyncio
 import io
+import json
+import os
 import queue
 import re
 import threading
@@ -18,7 +20,9 @@ from piper.config import SynthesisConfig
 from piper.download_voices import download_voice
 
 from raphael.audio.alignment import CharacterTimeline, character_timeline, estimated_timeline
+from raphael.audio.chatterbox_worker import ChatterboxTurboWorker, ChatterboxWorkerError
 from raphael.audio.native import sd
+from raphael.audio.speech_events import SpeechEvent, split_speech_event, strip_speech_events
 from raphael.config import get_settings, normalize_audio_device
 from raphael.logging import get_logger
 
@@ -38,7 +42,9 @@ def resolve_tts_engine(voice_name: str, engine: str = "auto") -> str:
         if "neural" in voice_name.lower():
             return "edge_tts"
         return "piper"
-    if selected not in {"piper", "fish_speech", "edge_tts"}:
+    if selected == "chatterbox":
+        selected = "chatterbox_turbo"
+    if selected not in {"piper", "fish_speech", "edge_tts", "chatterbox_turbo"}:
         raise ValueError(f"Unknown TTS engine: {engine}")
     return selected
 
@@ -77,7 +83,7 @@ def resolve_piper_voice_paths(voice_name: str, models_dir: str | Path) -> tuple[
 
 
 class TextToSpeech:
-    """Neural speech using local Fish Speech, Microsoft Edge-TTS, or Piper ONNX."""
+    """Local Piper, Edge, Fish Speech, or persistent Chatterbox Turbo speech."""
 
     def __init__(
         self,
@@ -96,6 +102,12 @@ class TextToSpeech:
         fish_chunk_length: int | None = None,
         fish_max_new_tokens: int | None = None,
         include_alignments: bool = False,
+        tts_fallback_voice: str | None = None,
+        voice_profiles_dir: str | Path | None = None,
+        chatterbox_model_dir: str | Path | None = None,
+        chatterbox_python: str | Path | None = None,
+        min_free_vram_mib: int | None = None,
+        audio_queue_size: int | None = None,
     ) -> None:
         settings = get_settings().audio
 
@@ -111,6 +123,22 @@ class TextToSpeech:
         self.enabled = enabled
         self.include_alignments = include_alignments
         self._synthesis_timing = threading.local()
+        repo_root = Path(__file__).resolve().parents[3]
+        self.tts_fallback_voice = tts_fallback_voice or settings.tts_fallback_voice
+        self.voice_profiles_dir = Path(voice_profiles_dir or settings.tts_voice_profiles)
+        self.chatterbox_model_dir = Path(
+            chatterbox_model_dir or settings.tts_chatterbox_model
+        )
+        self.chatterbox_python = Path(chatterbox_python or settings.tts_chatterbox_python)
+        self.min_free_vram_mib = (
+            min_free_vram_mib
+            if min_free_vram_mib is not None else settings.tts_min_free_vram_mb
+        )
+        self.audio_queue_size = audio_queue_size or settings.tts_audio_queue_size
+        self._repo_root = repo_root
+        self._chatterbox: ChatterboxTurboWorker | None = None
+        self._chatterbox_failed = False
+        self._profile_data: dict | None = None
 
         # Fish Speech zero-shot parameters
         self.fish_speech_url = fish_speech_url or settings.fish_speech_url
@@ -156,6 +184,10 @@ class TextToSpeech:
             )
             if self.engine == "piper":
                 self._load_voice()
+            elif self.engine == "chatterbox_turbo":
+                logger.info(
+                    "Chatterbox Turbo voice '%s' will load on its first request.", self.voice_name
+                )
             elif self.engine in ("fish_speech", "fish"):
                 logger.info(
                     "Fish Speech zero-shot engine ready (URL: %s, Voice: %s).",
@@ -217,6 +249,139 @@ class TextToSpeech:
         else:
             logger.warning("Reference audio file not found at '%s'", self.fish_ref_audio)
         return None
+
+    @property
+    def supports_sentence_pipeline(self) -> bool:
+        """Turbo synthesis is faster than playback and benefits from bounded prefetch."""
+        return self.engine == "chatterbox_turbo"
+
+    def _resolve_local_path(self, path: str | Path) -> Path:
+        """Resolve configured voice assets from the repository root or an absolute path."""
+        value = Path(path).expanduser()
+        return value.resolve() if value.is_absolute() else (self._repo_root / value).resolve()
+
+    def _load_chatterbox_worker(self) -> ChatterboxTurboWorker:
+        """Read one voice profile and start the persistent, offline pinned-model worker."""
+        if self._chatterbox is not None:
+            return self._chatterbox
+        profile_root = self._resolve_local_path(self.voice_profiles_dir)
+        manifest = profile_root / self.voice_name / "voice.json"
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        if data.get("name") != self.voice_name or data.get("engine") != "chatterbox_turbo":
+            raise ChatterboxWorkerError(f"Invalid Chatterbox voice profile: {manifest}")
+        expected = sorted(event.value for event in SpeechEvent)
+        if sorted(data.get("supported_events", [])) != expected:
+            raise ChatterboxWorkerError(
+                "Voice profile event list does not match native Turbo events"
+            )
+        reference = self._resolve_local_path(data["reference_audio"])
+        transcript = self._resolve_local_path(data["reference_transcript"])
+        if not transcript.is_file() or not transcript.read_text(encoding="utf-8").strip():
+            raise ChatterboxWorkerError(f"Reference transcript is missing or empty: {transcript}")
+        model_dir = self._resolve_local_path(self.chatterbox_model_dir)
+        configured_python = Path(self.chatterbox_python).expanduser()
+        if not configured_python.is_absolute():
+            configured_python = self._repo_root / configured_python
+        python = Path(os.path.abspath(configured_python))
+        script = self._repo_root / "scripts/chatterbox_turbo_worker.py"
+        self._profile_data = data
+        self._chatterbox = ChatterboxTurboWorker(
+            python,
+            script,
+            model_dir,
+            reference,
+            transcript.read_text(encoding="utf-8"),
+            min_free_vram_mib=self.min_free_vram_mib,
+        )
+        return self._chatterbox
+
+    def _synthesize_chatterbox(
+        self, text: str,
+    ) -> tuple[np.ndarray, int] | None:
+        """Generate with cached Turbo conditionals; latch failures into local Piper fallback."""
+        event_text, spoken_text = split_speech_event(text)
+        if not spoken_text:
+            return None
+        if self._chatterbox_failed:
+            return self._synthesize_piper_fallback(spoken_text)
+        canceled = getattr(self._synthesis_timing, "cancelled", lambda: False)
+        try:
+            worker = self._load_chatterbox_worker()
+            model_text = f"{event_text} {spoken_text}".strip()
+            result = worker.synthesize(model_text, canceled=canceled)
+            if result is None:
+                return None
+            logger.debug("Chatterbox Turbo synthesis completed (%d characters).", len(spoken_text))
+            return result
+        except Exception as err:
+            self._chatterbox_failed = True
+            logger.warning(
+                "Chatterbox Turbo failed; switching to local Piper '%s': %s",
+                self.tts_fallback_voice,
+                err,
+            )
+            if self._chatterbox is not None:
+                self._chatterbox.close(force=True)
+                self._chatterbox = None
+            return self._synthesize_piper_fallback(spoken_text)
+
+    def warmup(self) -> bool:
+        """Load the cached voice in the background without synthesizing placeholder speech."""
+        if not self.enabled or self.engine != "chatterbox_turbo" or self._chatterbox_failed:
+            return False
+        try:
+            self._load_chatterbox_worker().start()
+            return True
+        except Exception as err:
+            self._chatterbox_failed = True
+            logger.warning(
+                "Chatterbox Turbo initialization failed; local Piper fallback is ready: %s", err
+            )
+            if self._chatterbox is not None:
+                self._chatterbox.close(force=True)
+                self._chatterbox = None
+            return False
+
+    def _synthesize_piper_fallback(self, text: str) -> tuple[np.ndarray, int] | None:
+        """Use the selected RAPHAEL Piper voice, then Amy, without a network fallback."""
+        if self._fallback_voice is not None:
+            try:
+                return self._synthesize_piper(
+                    strip_speech_events(text), voice=self._fallback_voice
+                )
+            except Exception as err:
+                logger.warning("Cached Piper fallback failed; trying another local voice: %s", err)
+                self._fallback_voice = None
+        configured = (
+            self._profile_data.get("fallback_voice")
+            if self._profile_data else self.tts_fallback_voice
+        )
+        for name in dict.fromkeys([configured, "en_US-amy-medium"]):
+            onnx = self.models_dir / f"{name}.onnx"
+            config = onnx.with_suffix(".onnx.json")
+            if not config.is_file():
+                config = onnx.with_suffix(".json")
+            if not onnx.is_file() or not config.is_file():
+                logger.warning("Local Piper fallback '%s' is not installed.", name)
+                continue
+            try:
+                voice = PiperVoice.load(
+                    model_path=str(onnx), config_path=str(config), use_cuda=False,
+                    **({"include_alignments": True} if self.include_alignments else {}),
+                )
+                self._fallback_voice = voice
+                logger.info("Using local Piper fallback voice '%s'.", name)
+                return self._synthesize_piper(strip_speech_events(text), voice=voice)
+            except Exception as err:
+                self._fallback_voice = None
+                logger.warning("Local Piper fallback '%s' failed: %s", name, err)
+        return None
+
+    def close(self) -> None:
+        """Release the persistent Turbo process during orderly RAPHAEL shutdown."""
+        worker, self._chatterbox = self._chatterbox, None
+        if worker is not None:
+            worker.close()
 
     @staticmethod
     def clean_text_for_speech(text: str) -> str:
@@ -410,6 +575,9 @@ class TextToSpeech:
         if not clean_text:
             return None
 
+        if self.engine == "chatterbox_turbo":
+            return self._synthesize_chatterbox(clean_text)
+        clean_text = strip_speech_events(clean_text)
         if self.engine == "fish_speech":
             return self._synthesize_fish_speech(clean_text)
         elif self.engine == "edge_tts":
@@ -432,7 +600,7 @@ class TextToSpeech:
         """Track known generated text without reviving a canceled stream."""
         with self._playback_lock:
             if generation == self._playback_generation:
-                self._stream_text = self.clean_text_for_speech(text)
+                self._stream_text = strip_speech_events(self.clean_text_for_speech(text))
 
     def end_stream(self, generation: int) -> None:
         """Clear completed stream state; an old worker cannot clear a newer reply."""
@@ -466,12 +634,14 @@ class TextToSpeech:
                     if acquired:
                         break
                 if acquired and current():
+                    self._synthesis_timing.cancelled = lambda: not current()
                     result.put(self._prepare_playback(text))
                 else:
                     result.put(None)
             except Exception as err:
                 result.put(err)
             finally:
+                self._synthesis_timing.cancelled = lambda: False
                 if acquired:
                     self._synthesis_lock.release()
                 self._synthesis_slots.release()
@@ -500,11 +670,20 @@ class TextToSpeech:
             return None
         audio, sample_rate = result
         aligned = self._synthesis_timing.result
+        display_text = strip_speech_events(self.clean_text_for_speech(text))
         timeline = (
             aligned[1] if aligned is not None and aligned[0] is audio
-            else estimated_timeline(self.clean_text_for_speech(text), audio.size / sample_rate)
+            else estimated_timeline(display_text, audio.size / sample_rate)
         )
         return audio, sample_rate, timeline
+
+    def prepare_sentence(
+        self, text: str, cancel_event: threading.Event, generation: int,
+    ) -> tuple[np.ndarray, int, CharacterTimeline] | None:
+        """Synthesize a sentence ahead of playback, honoring the reply generation."""
+        if not self.enabled or cancel_event.is_set():
+            return None
+        return self._synthesize_cancelable(text, cancel_event, generation)
 
     def speak(
         self,
@@ -515,6 +694,7 @@ class TextToSpeech:
         generation: int | None = None,
         on_start: Callable[[], None] | None = None,
         on_progress: Callable[[str, bool, bool], None] | None = None,
+        _prepared: tuple[np.ndarray, int, CharacterTimeline] | None = None,
     ) -> bool:
         """Synthesize and play speech audio through speakers."""
         if not self.enabled:
@@ -525,10 +705,12 @@ class TextToSpeech:
                 generation = self._playback_generation
             if generation != self._playback_generation or (cancel_event and cancel_event.is_set()):
                 return False
-            self._pending_text = self.clean_text_for_speech(text)
+            self._pending_text = strip_speech_events(self.clean_text_for_speech(text))
             self._play_started_at = 0.0
             self._play_duration = 0.0
-        if cancel_event is not None:
+        if _prepared is not None:
+            synth_result = _prepared
+        elif cancel_event is not None:
             synth_result = self._synthesize_cancelable(text, cancel_event, generation)
         else:
             with self._synthesis_lock:
