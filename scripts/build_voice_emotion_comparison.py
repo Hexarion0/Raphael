@@ -58,8 +58,8 @@ def main() -> None:
     qwen = combine_qwen()
     groups = {
         "main": [
-            "turbo-neutral", "turbo-reference-pleased", "original-default", "original-moderate",
-            qwen.name,
+            "turbo-neutral", "turbo-reference-pleased", "turbo-emotion-tags",
+            "original-default", "original-moderate", qwen.name,
         ],
         "original-levels": [f"original-{n}" for n in ["default", "subtle", "moderate", "strong"]],
         "turbo-references": [
@@ -96,6 +96,8 @@ def main() -> None:
         ], check=True)
         page = output.read_text()
         page = page.replace("<h1>RAPHAEL", explanation + "<h1>RAPHAEL", 1)
+        page = page.replace("<h1>RAPHAEL · native voice cloning</h1>",
+                            "<h1>RAPHAEL · voice emotion listening</h1>")
         page = page.replace(
             "<title>RAPHAEL — native voice cloning comparison</title>",
             "<title>RAPHAEL — voice emotion listening</title>",

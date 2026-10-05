@@ -111,11 +111,15 @@ excluding playback. ASR checks are fallible.</p>
             f"{html.escape(str(summary['errors']))}</td></tr>"
         )
     parts.append("</table></div>")
+    chunk_note = (
+        "CosyVoice emits native chunks, but their arrivals can be slower than playback. "
+        if any(s["candidate"] == "cosyvoice3" for _, s, _, _ in models)
+        else "The tested Chatterbox and Qwen APIs return complete waveforms. "
+    )
     parts.append(
         '<p class="warning">These WAVs are already generated, so playback here has no synthesis '
-        "gaps. CosyVoice emits native chunks, but their arrivals can be slower than playback. "
-        "Qwen's tested Python wrapper returns the complete waveform. Speaker cosine checks "
-        "are uncalibrated; each encoder is also used by one of the compared systems.</p>"
+        "gaps. " + chunk_note + "Speaker cosine checks are uncalibrated; encoders can favor "
+        "the systems that use them for conditioning.</p>"
     )
     diagnostics = output.parent / "diagnostics.json"
     if diagnostics.exists():

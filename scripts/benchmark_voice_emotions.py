@@ -85,6 +85,22 @@ def build_suites(output: Path) -> dict[str, Path]:
             "text": "You DID it! Everything is working again! I'm really happy for you!",
         },
     ]
+    emotion_tags = []
+    for item in emotions:
+        text = item["text"]
+        if item["id"] == "09_comforting":
+            text = text.replace("Hey, it's okay.", "Hey, it's okay. [sigh]")
+        elif item["id"] == "10_concerned":
+            text = text.replace("overwhelmed.", "overwhelmed. [sigh]")
+        elif item["id"] == "12_happy":
+            text = text.replace("You did it!", "You did it! [laugh]")
+        elif item["id"] == "13_excited":
+            text = "[gasp] " + text
+        elif item["id"] == "14_playful":
+            text = text.replace("nicely?", "nicely? [chuckle]")
+        elif item["id"] == "15_sleepy":
+            text = text.replace("There we go.", "There we go. [sigh]")
+        emotion_tags.append({**item, "text": text, "spoken_text": item["text"]})
     return {
         name: write_json(output / f"{name}-suite.json", rows)
         for name, rows in {
@@ -95,6 +111,7 @@ def build_suites(output: Path) -> dict[str, Path]:
             "punct-neutral": punctuation,
             "punct-expressive": changed,
             "sampling": [emotions[i] for i in [0, 3, 5]],
+            "emotion-tags": emotion_tags,
         }.items()
     }
 
@@ -128,7 +145,8 @@ def main() -> None:
         )
         runs.extend(
             (f"turbo-{name}", f"Turbo · {name}", PRIMARY, name, 1, {})
-            for name in ["tags-neutral", "tags", "punct-neutral", "punct-expressive"]
+            for name in ["tags-neutral", "tags", "punct-neutral", "punct-expressive",
+                         "emotion-tags"]
         )
         runs.extend(
             (

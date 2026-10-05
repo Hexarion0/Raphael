@@ -69,6 +69,10 @@ def main() -> None:
         primary_embedding = encoder.embeds_from_wavs([primary_audio], sample_rate=16000)[0]
     asr = json.loads((args.source / "transcription.json").read_text())
     provenance = json.loads((args.source / "provenance.json").read_text())
+    if provenance["video_id"] != "PYmd20HsBj4":
+        raise ValueError("This timestamp shortlist applies only to source PYmd20HsBj4")
+    if sha256(args.source / "working.flac") != provenance["working_sha256"]:
+        raise ValueError("Working audio changed since source verification")
     audio, rate = sf.read(args.source / "working.flac", dtype="float32", always_2d=True)
     references = []
     for name, start, end, reason in PASSAGES:
@@ -111,9 +115,9 @@ def main() -> None:
             "start": start,
             "end": end,
             "duration": len(clip) / rate,
-            "video_id": "PYmd20HsBj4",
-            "source_url": "https://www.youtube.com/watch?v=PYmd20HsBj4",
-            "source_sha256": provenance.get("original_sha256"),
+            "video_id": provenance["video_id"],
+            "source_url": provenance["source_url"],
+            "source_sha256": provenance["original_sha256"],
             "reference_wav": str(path.resolve()),
             "wav_sha256": sha256(path),
             "text": text,
