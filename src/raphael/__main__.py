@@ -3,7 +3,6 @@
 import argparse
 import re
 import sys
-import threading
 import time
 from pathlib import Path
 
@@ -780,29 +779,26 @@ def main() -> int:
             from raphael.audio.captions import install_caption_logging
 
             restore_caption_logging = install_caption_logging(captions)
-        tts_warmup_thread = None
-        stop_tts_warmup = threading.Event()
         try:
-            loop.start()
-            if tts.engine == "chatterbox_turbo":
-                def warm_tts_after_stt() -> None:
-                    deadline = time.monotonic() + 120
-                    while not stop_tts_warmup.is_set() and time.monotonic() < deadline:
-                        if stt.wait_ready(timeout=1):
-                            if not stop_tts_warmup.is_set():
-                                tts.warmup()
-                            return
-                    if not stop_tts_warmup.is_set():
-                        logger.warning(
-                            "STT did not become ready; deferring Turbo initialization."
-                        )
-
-                tts_warmup_thread = threading.Thread(
-                    target=warm_tts_after_stt,
-                    name="raphael-tts-warmup",
-                    daemon=True,
+            if tts.enabled and tts.engine == "chatterbox_turbo":
+                logger.info(
+                    "Preparing Chatterbox Turbo before enabling listening; "
+                    "first startup can take several seconds."
                 )
-                tts_warmup_thread.start()
+                warmup_started = time.monotonic()
+                if stt.wait_ready(timeout=120):
+                    warmed = tts.warmup()
+                    logger.info(
+                        "Turbo startup preparation finished in %.2fs (%s).",
+                        time.monotonic() - warmup_started,
+                        "voice ready" if warmed else "local fallback available",
+                    )
+                else:
+                    logger.warning(
+                        "STT did not become ready within 120s; starting listener and "
+                        "deferring Turbo initialization."
+                    )
+            loop.start()
             if ambient_enabled[0]:
                 logger.info(
                     "Ambient listening active; follow-up policy=%s, window=%.0fs.",
@@ -828,9 +824,6 @@ def main() -> int:
                     if restore_caption_logging is not None:
                         restore_caption_logging()
                 finally:
-                    stop_tts_warmup.set()
-                    if tts_warmup_thread is not None:
-                        tts_warmup_thread.join(timeout=5.0)
                     tts.close()
 
     logger.info("Ready. Use 'raphael start' for live voice listening.")
