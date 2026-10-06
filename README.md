@@ -73,7 +73,7 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 cp .env.example .env   # add your API keys
-python -m raphael --listen
+raphael start
 ```
 
 Training dependencies are optional: use `pip install -e ".[train]"` for custom

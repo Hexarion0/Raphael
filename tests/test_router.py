@@ -119,7 +119,7 @@ def test_background_tasks_ignore_code_history_and_strong_override(mock_manager, 
     assert decision.complexity == ComplexityLevel.SIMPLE
     assert decision.override_applied is None
     router.send([ChatMessage("user", prompt)], purpose=purpose)
-    assert mock_manager.send_with_fallback.call_args.kwargs["model"] != (
+    assert mock_manager.stream_with_fallback.call_args.kwargs["model"] != (
         "nvidia/nemotron-3-ultra-550b-a55b"
     )
 

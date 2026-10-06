@@ -8,11 +8,13 @@ from typing import Any
 import httpx
 
 from raphael.config import get_settings
+from raphael.latency import http_extensions, mark
 from raphael.logging import get_logger
 from raphael.providers.base import ChatMessage, LLMProvider, LLMResponse, LLMStreamChunk
 from raphael.providers.streaming import streaming_client
 
 logger = get_logger("providers.nim")
+STREAM_READ_TIMEOUT_SECONDS = 12.0
 
 
 class NimProvider(LLMProvider):
@@ -118,11 +120,14 @@ class NimProvider(LLMProvider):
                 request = self._model_payload(payload, active_model)
                 for attempt in range(attempts):
                     try:
+                        mark("provider_request_started", provider=self.name, model=active_model)
                         response = client.post(
                             f"{self.base_url}/chat/completions",
                             headers=self._get_headers(),
                             json=request,
+                            extensions=http_extensions(),
                         )
+                        mark("provider_http_response", status=response.status_code)
                         response.raise_for_status()
                         return response.json()
                     except httpx.HTTPStatusError as err:
@@ -310,20 +315,25 @@ class NimProvider(LLMProvider):
 
         def _iter_stream(client: httpx.Client, active_model: str) -> Iterator[LLMStreamChunk]:
             nonlocal emitted
+            mark("provider_request_started", provider=self.name, model=active_model)
             with client.stream(
                 "POST",
                 f"{self.base_url}/chat/completions",
                 headers=self._get_headers(),
                 json=self._model_payload(payload, active_model),
+                extensions=http_extensions(),
             ) as response:
+                mark("provider_http_response", status=response.status_code)
                 response.raise_for_status()
                 for line in response.iter_lines():
+                    mark("provider_first_line")
                     if cancel_event is not None and cancel_event.is_set():
                         return
                     line = line.strip()
                     if not line or not line.startswith("data:"):
                         continue
                     data_str = line[len("data:") :].strip()
+                    mark("provider_first_sse")
                     if data_str == "[DONE]":
                         if emitted:
                             yield LLMStreamChunk(
@@ -336,8 +346,14 @@ class NimProvider(LLMProvider):
                         if not choices:
                             continue  # Usage-only SSE event.
                         choice = choices[0]
+                        raw_delta = choice.get("delta") or {}
+                        if raw_delta.get("reasoning_content") or raw_delta.get("reasoning"):
+                            mark("provider_first_model_token", kind="reasoning")
+                            mark("provider_first_reasoning")
                         delta = (choice.get("delta") or {}).get("content", "")
                         if delta:
+                            mark("provider_first_model_token", kind="content")
+                            mark("provider_first_content")
                             emitted = True
                             yield LLMStreamChunk(
                                 delta=delta, model=active_model, provider=self.name, is_final=False
@@ -351,7 +367,12 @@ class NimProvider(LLMProvider):
                     except json.JSONDecodeError:
                         continue
 
-        with streaming_client(self.timeout, cancel_event) as client:
+        stream_timeout = httpx.Timeout(
+            self.timeout,
+            connect=min(self.timeout, 10.0),
+            read=min(self.timeout, STREAM_READ_TIMEOUT_SECONDS),
+        )
+        with streaming_client(stream_timeout, cancel_event) as client:
             last_err: httpx.HTTPStatusError | None = None
             for attempt in range(MAX_RETRIES):
                 if cancel_event is not None and cancel_event.is_set():

@@ -1,14 +1,17 @@
 import re
 import threading
+import time
 from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import Enum
 
 from raphael.config import get_settings
+from raphael.latency import mark
 from raphael.logging import get_logger
 from raphael.providers.base import ChatMessage, LLMResponse, LLMStreamChunk
 from raphael.providers.intents import answer_clock_query
 from raphael.providers.manager import ProviderManager
+from raphael.providers.priority import BackgroundDeferred, RequestPriority
 
 logger = get_logger("providers.router")
 
@@ -43,6 +46,7 @@ class ModelRouter:
 
     def __init__(self, manager: ProviderManager | None = None) -> None:
         self.manager = manager or ProviderManager()
+        self.priority = RequestPriority()
 
     def classify_complexity(self, prompt: str) -> tuple[ComplexityLevel, str, str | None]:
         """Classify prompt into SIMPLE, MEDIUM, or COMPLEX with explanation and override info."""
@@ -106,6 +110,7 @@ class ModelRouter:
 
     def route(self, prompt: str, *, purpose: str = "conversation") -> RoutingDecision:
         """Determine the optimal provider and model for a given prompt."""
+        mark(f"{purpose}.routing_started")
         if purpose in {"summary", "speech_gate"}:
             complexity, reason, override = (
                 ComplexityLevel.SIMPLE,
@@ -218,6 +223,8 @@ class ModelRouter:
             decision.model_name or "default",
             decision.reason,
         )
+        mark(f"{purpose}.routing_finished", provider=decision.provider_name,
+             model=decision.model_name)
         return decision
 
     def send(
@@ -227,8 +234,10 @@ class ModelRouter:
         max_tokens: int | None = 512,
         *,
         purpose: str = "conversation",
+        cancel_event: threading.Event | None = None,
     ) -> LLMResponse:
         """Route and execute a chat completion with automatic fallback."""
+        mark(f"{purpose}.route_call_started")
         latest_user_text = next(
             (m.content for m in reversed(messages) if m.role == "user"),
             "",
@@ -241,14 +250,33 @@ class ModelRouter:
         # Strip override command prefixes from messages if present
         clean_messages = self._clean_override_prefixes(messages)
 
-        # Execute with manager fallback starting from chosen provider
-        return self.manager.send_with_fallback(
-            clean_messages,
-            preferred_provider=decision.provider_name,
-            model=decision.model_name,
-            temperature=temperature,
-            max_tokens=max_tokens or 512,
-        )
+        options = {
+            "preferred_provider": decision.provider_name, "model": decision.model_name,
+            "temperature": temperature, "max_tokens": max_tokens or 512,
+        }
+
+        def collect(canceled: threading.Event | None) -> LLMResponse:
+            started = time.monotonic()
+            response = LLMResponse("", "", "")
+            for chunk in self.manager.stream_with_fallback(
+                clean_messages, cancel_event=canceled, **options,
+            ):
+                response.content += chunk.delta
+                response.model, response.provider = chunk.model, chunk.provider
+            if canceled is not None and canceled.is_set():
+                raise BackgroundDeferred("Provider work was canceled")
+            response.latency = time.monotonic() - started
+            return response
+
+        if purpose == "summary":
+            with self.priority.background() as canceled:
+                return collect(canceled)
+        with self.priority.foreground():
+            # Gates still return complete JSON, but their blocked reads can now
+            # be canceled immediately when a user resumes speaking.
+            if purpose == "speech_gate" or cancel_event is not None:
+                return collect(cancel_event)
+            return self.manager.send_with_fallback(clean_messages, **options)
 
     def stream(
         self,
@@ -259,17 +287,19 @@ class ModelRouter:
         cancel_event: threading.Event | None = None,
     ) -> Iterator[LLMStreamChunk]:
         """Route and stream chat completion tokens with automatic fallback."""
+        mark("conversation.route_call_started")
         decision = self.route(self._routing_text(messages))
         clean_messages = self._clean_override_prefixes(messages)
 
-        yield from self.manager.stream_with_fallback(
-            clean_messages,
-            preferred_provider=decision.provider_name,
-            model=decision.model_name,
-            temperature=temperature,
-            max_tokens=max_tokens or 512,
-            cancel_event=cancel_event,
-        )
+        with self.priority.foreground():
+            yield from self.manager.stream_with_fallback(
+                clean_messages,
+                preferred_provider=decision.provider_name,
+                model=decision.model_name,
+                temperature=temperature,
+                max_tokens=max_tokens or 512,
+                cancel_event=cancel_event,
+            )
 
     @staticmethod
     def _routing_text(messages: list[ChatMessage]) -> str:

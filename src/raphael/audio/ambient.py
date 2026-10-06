@@ -2,6 +2,7 @@
 
 import json
 import re
+import threading
 import time
 from collections import deque
 from dataclasses import dataclass
@@ -101,6 +102,7 @@ class AmbientConversation:
         *, started_at: float | None = None, verified_wake: bool = False,
         during_reply: bool = False,
         unfinished_request: list[str] | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> SpeechDecision:
         """Keep recent dialogue engaged; require an address outside its time window."""
         now = time.monotonic()
@@ -199,6 +201,7 @@ class AmbientConversation:
                 temperature=0,
                 max_tokens=160,
                 purpose="speech_gate",
+                **({"cancel_event": cancel_event} if cancel_event is not None else {}),
             )
             content = response.content.strip()
             fenced = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", content, re.I | re.S)

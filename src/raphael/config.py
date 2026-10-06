@@ -53,11 +53,11 @@ class ProviderConfig(BaseModel):
         description="NVIDIA NIM API key",
     )
     nim_model: str = Field(
-        default="nvidia/nemotron-3.5-lightning-30b-a3b",
+        default="nvidia/nemotron-3-super-120b-a12b",
         description="Default NVIDIA NIM model name",
     )
     nim_complex_model: str = Field(
-        default="nvidia/nemotron-3-ultra-550b-a55b",
+        default="nvidia/nemotron-3-super-120b-a12b",
         description="NVIDIA NIM model for complex reasoning and coding tasks",
     )
     nim_fallback_model: str = Field(
@@ -219,8 +219,8 @@ class Settings(BaseSettings):
 
     # Provider settings
     nim_api_key: SecretStr | None = Field(default=None)
-    nim_model: str = Field(default="nvidia/nemotron-3.5-lightning-30b-a3b")
-    nim_complex_model: str = Field(default="nvidia/nemotron-3-ultra-550b-a55b")
+    nim_model: str = Field(default="nvidia/nemotron-3-super-120b-a12b")
+    nim_complex_model: str = Field(default="nvidia/nemotron-3-super-120b-a12b")
     nim_fallback_model: str = Field(default="meta/llama-3.2-90b-vision-instruct")
     openrouter_api_key: SecretStr | None = Field(default=None)
     groq_api_key: SecretStr | None = Field(default=None)

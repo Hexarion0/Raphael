@@ -8,7 +8,9 @@ import httpx
 
 
 @contextmanager
-def streaming_client(timeout: float, cancel_event: threading.Event | None = None) -> Iterator:
+def streaming_client(
+    timeout: float | httpx.Timeout, cancel_event: threading.Event | None = None,
+) -> Iterator:
     """Close the HTTP client when its owning reply is canceled."""
     finished = threading.Event()
     with httpx.Client(timeout=timeout) as client:

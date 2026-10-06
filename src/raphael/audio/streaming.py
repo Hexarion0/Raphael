@@ -5,9 +5,11 @@ import re
 import threading
 import time
 from collections.abc import Callable
+from contextvars import copy_context
 from dataclasses import dataclass
 
 from raphael.audio.speech_events import strip_speech_events
+from raphael.latency import active_trace, mark
 from raphael.logging import get_logger
 from raphael.providers.base import ChatMessage, LLMResponse, LLMStreamChunk
 
@@ -126,6 +128,7 @@ class _SentencePipeline:
         self.started = started
         self.on_audio_started = on_audio_started
         self.on_progress = on_progress
+        self.trace = active_trace.get()
         self.cancelled = threading.Event()
         limit = max(1, int(getattr(tts, "audio_queue_size", 2)))
         self.sentences: queue.Queue = queue.Queue(maxsize=1)
@@ -175,6 +178,8 @@ class _SentencePipeline:
                 row = {"text": text, "text_available_seconds": available}
                 started = time.monotonic()
                 row["synthesis_started_seconds"] = started - self.started
+                if self.trace is not None:
+                    self.trace.mark("tts_synthesis_started")
                 try:
                     prepared = self.tts.prepare_sentence(text, self.cancelled, self.generation)
                 except Exception as err:
@@ -183,6 +188,8 @@ class _SentencePipeline:
                     logger.exception("Sentence synthesis failed")
                     continue
                 finished = time.monotonic()
+                if self.trace is not None:
+                    self.trace.mark("tts_synthesis_finished")
                 row["synthesis_seconds"] = finished - started
                 row["synthesis_finished_seconds"] = finished - self.started
                 if prepared is None or not self._current():
@@ -226,6 +233,8 @@ class _SentencePipeline:
 
             def started() -> None:
                 playback_start = time.monotonic()
+                if self.trace is not None:
+                    self.trace.mark("first_audio_playback")
                 row["playback_started_seconds"] = playback_start - self.started
                 if self._previous_play_end is not None:
                     gap = max(0.0, playback_start - self._previous_play_end)
@@ -305,6 +314,8 @@ def stream_reply(
     a blocked read. Every reader owns and closes its own generator.
     """
     started = time.monotonic()
+    trace = active_trace.get()
+    mark("reply_stream_started")
     result = StreamedReply(LLMResponse("", "", ""))
     if not current():
         result.canceled = True
@@ -346,7 +357,10 @@ def stream_reply(
                 offer(end)
                 _READERS.release()
 
-    worker = threading.Thread(target=read, name="raphael-reply-stream", daemon=True)
+    context = copy_context()
+    worker = threading.Thread(
+        target=lambda: context.run(read), name="raphael-reply-stream", daemon=True
+    )
     try:
         generation = tts.begin_stream()
         worker.start()
@@ -359,6 +373,8 @@ def stream_reply(
 
     def audio_started(sentence: str) -> None:
         if result.first_audio_seconds is None:
+            if trace is not None:
+                trace.mark("first_audio_playback")
             result.first_audio_seconds = time.monotonic() - started
             logger.info("Reply audio started after %.2fs.", result.first_audio_seconds)
         if on_sentence_start is not None and current():
@@ -370,6 +386,8 @@ def stream_reply(
         )
 
     def speak(parts: list[str]) -> None:
+        if parts:
+            mark("first_tts_chunk", chars=len(parts[0]))
         if pipeline is not None:
             available = time.monotonic() - started
             for part in parts:
@@ -413,10 +431,13 @@ def stream_reply(
             result.response.provider, result.response.model = item.provider, item.model
             delta = visible.feed(item.delta)
             if delta and result.first_token_seconds is None:
+                mark("first_visible_text")
                 result.first_token_seconds = time.monotonic() - started
                 logger.info("First reply text arrived after %.2fs.", result.first_token_seconds)
             result.response.content += delta
             speech_delta = audible.feed(delta)
+            if speech_delta.strip():
+                mark("first_usable_spoken_text")
             speech_text += speech_delta
             tts.update_stream(generation, speech_text)
             speak(sentences.feed(speech_delta))

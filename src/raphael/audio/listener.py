@@ -14,6 +14,7 @@ import numpy as np
 
 from raphael.audio.recorder import VoiceRecorder
 from raphael.audio.wake import WakeWordDetector
+from raphael.latency import TurnTrace, active_trace, mark
 from raphael.logging import get_logger
 
 if TYPE_CHECKING:
@@ -96,6 +97,8 @@ class WakeListenerLoop:
         self._recent_audio: deque = deque(maxlen=max(1, round(sample_rate * 3.0 / 1280)))
         self._recording_generation = 0
         self.dropped_frames = 0
+        self._frame_received_at: float | None = None
+        self._last_speech_received_at: float | None = None
 
     @property
     def state(self) -> ListenerState:
@@ -149,7 +152,7 @@ class WakeListenerLoop:
     def _audio_callback(self, indata: np.ndarray, frames: int, time_info: Any, status: Any) -> None:
         """Copy borrowed audio and enqueue it; never run inference or take the state lock."""
         if self._running:
-            if self._offer(self._frame_queue, indata.copy()):
+            if self._offer(self._frame_queue, (indata.copy(), time.monotonic())):
                 self.dropped_frames += 1
 
     def _start_recording(self) -> None:
@@ -161,6 +164,7 @@ class WakeListenerLoop:
         self._response_cancel = threading.Event()
         self._recording_generation += 1
         self.recorder.start()
+        self._last_speech_received_at = None
         self._set_state(ListenerState.RECORDING)
 
     def _stop_output(self) -> None:
@@ -250,13 +254,14 @@ class WakeListenerLoop:
     def _frame_worker(self) -> None:
         while not self._stop_event.is_set():
             try:
-                audio = self._frame_queue.get(timeout=0.1)
+                audio, received_at = self._frame_queue.get(timeout=0.1)
             except queue.Empty:
                 continue
             try:
                 with self._lock:
                     if not self._running:
                         continue
+                    self._frame_received_at = received_at
                     self._handle_frame(audio)
             except Exception:
                 logger.exception("Audio frame processing failed")
@@ -354,9 +359,23 @@ class WakeListenerLoop:
                     self._seed_wake_audio(trigger)
                     self._notify(self.on_wake, trigger)
                     return
-            if not self.recorder.add_frame(audio):
+            previous_speech = self.recorder._last_speech_time
+            recording = self.recorder.add_frame(audio)
+            if self.recorder._last_speech_time != previous_speech:
+                self._last_speech_received_at = self._frame_received_at or time.monotonic()
+            if not recording:
                 recorded = self.recorder.get_audio()
                 info = self._last_wake_info.copy()
+                trace = TurnTrace()
+                trace.mark("capture_started", at=self.recorder.capture_started_at)
+                if self.recorder.last_speech_observed_at is not None:
+                    trace.mark("last_vad_speech", at=self.recorder.last_speech_observed_at)
+                if self._last_speech_received_at is not None:
+                    trace.mark("last_speech_frame_received", at=self._last_speech_received_at)
+                if self._frame_received_at is not None:
+                    trace.mark("endpoint_frame_received", at=self._frame_received_at)
+                trace.mark("endpoint_detected")
+                info["latency_trace"] = trace
                 info["cancel_event"] = self._response_cancel
                 if info.get("wake_prefix_trimmed"):
                     info["post_wake_speech"] = self.recorder._speech_started
@@ -382,7 +401,10 @@ class WakeListenerLoop:
                 audio, info, generation = self._processing_queue.get(timeout=0.1)
             except queue.Empty:
                 continue
+            trace = info.get("latency_trace")
+            trace_token = active_trace.set(trace)
             try:
+                mark("processing_dequeued")
                 if not self._running:
                     continue
                 if generation != self._recording_generation:
@@ -392,18 +414,25 @@ class WakeListenerLoop:
                     info.get("wake_prefix_trimmed") and not info.get("post_wake_speech", True)
                 )
                 if self.stt and audio.size and has_command_audio:
+                    stt_details: dict[str, Any] = {}
                     logger.info(
                         "Transcribing %.2fs of recorded speech...", audio.size / self.sample_rate
                     )
                     detailed = getattr(self.stt, "transcribe_detailed", None)
+                    mark("stt_started")
                     if callable(detailed):
                         result = detailed(audio, beam_size=self.stt_beam_size)
+                        stt_details = result
                         text = result["text"]
                         info["stt_needs_repeat"] = result.get("needs_repeat", False)
                         info["stt_confidence"] = result.get("confidence", 0.0)
                         info["stt_raw_text"] = result.get("raw_text", text)
                     else:
                         text = self.stt.transcribe(audio, beam_size=self.stt_beam_size)
+                    mark("stt_finished", device=self.stt.device if hasattr(
+                        self.stt, "device"
+                    ) else "unknown", confidence=stt_details.get("confidence"),
+                         needs_repeat=stt_details.get("needs_repeat"), words=len(text.split()))
                     logger.info(
                         "STT finished: %d words, confidence=%.2f, repeat=%s.",
                         len(text.split()), info.get("stt_confidence", 0.0),
@@ -458,6 +487,10 @@ class WakeListenerLoop:
                         self.detector.reset(set_cooldown=False)
                         self._set_state(ListenerState.LISTENING_WAKE)
             finally:
+                if trace is not None:
+                    trace.mark("turn_finished")
+                    trace.log()
+                active_trace.reset(trace_token)
                 self._processing_queue.task_done()
 
     def start(self) -> None:

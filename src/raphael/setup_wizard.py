@@ -115,7 +115,7 @@ def run_setup_wizard() -> None:
     defaults = {
         "RAPHAEL_ENV": "development",
         "RAPHAEL_LOG_LEVEL": "INFO",
-        "NIM_MODEL": "nvidia/nemotron-3.5-lightning-30b-a3b",
+        "NIM_MODEL": "nvidia/nemotron-3-super-120b-a12b",
         "OLLAMA_HOST": "http://localhost:11434",
         "WAKE_WORD": "hey raphael",
         "WAKE_THRESHOLD": "0.5",
@@ -161,5 +161,5 @@ def run_setup_wizard() -> None:
         print(f"⚠️ Audio test skipped or failed: {err}")
 
     print("\n" + "=" * 55)
-    print("  Setup Complete! Run: python -m raphael --listen")
+    print("  Setup Complete! Run: raphael start")
     print("=" * 55 + "\n")

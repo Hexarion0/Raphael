@@ -274,7 +274,7 @@ def test_callback_keeps_latest_audio_when_detection_is_slow():
         assert loop._frame_queue.qsize() == 8
         assert loop.dropped_frames >= 92
         frame[:] = 1
-        assert not np.any(loop._frame_queue.queue[-1])  # Callback owns a copy.
+        assert not np.any(loop._frame_queue.queue[-1][0])  # Callback owns a copy.
     finally:
         release.set()
         loop.stop()
