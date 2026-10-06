@@ -47,6 +47,20 @@ def test_engine_defaults_to_voice_detection():
     assert settings.audio.tts_engine == "auto"
 
 
+def test_chatterbox_voice_profile_and_fallback_settings_reach_audio_config(tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "TTS_ENGINE=chatterbox_turbo\nTTS_VOICE=raphael\n"
+        "TTS_FALLBACK_VOICE=en_US-amy-medium\nTTS_AUDIO_QUEUE_SIZE=1\n"
+    )
+    with patch.dict(os.environ, {}, clear=True):
+        audio = Settings(_env_file=env_file).audio
+    assert audio.tts_engine == "chatterbox_turbo"
+    assert audio.tts_voice == "raphael"
+    assert audio.tts_fallback_voice == "en_US-amy-medium"
+    assert audio.tts_audio_queue_size == 1
+
+
 def test_audio_device_indices_and_names_from_env(tmp_path):
     from raphael.config import AudioConfig
 

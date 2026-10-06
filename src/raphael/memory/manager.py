@@ -8,6 +8,7 @@ from raphael.logging import get_logger
 from raphael.memory.models import ConversationTurn, MemoryItem, MemoryType
 from raphael.memory.store import MemoryStore
 from raphael.providers.base import ChatMessage
+from raphael.providers.priority import BackgroundDeferred
 from raphael.providers.router import ModelRouter
 
 logger = get_logger("memory.manager")
@@ -233,6 +234,9 @@ class ConversationManager:
                     ),
                 )
                 summary_text = response.content.strip()[:SUMMARY_MAX_CHARS]
+            except BackgroundDeferred:
+                logger.info("Deferred memory summary for foreground conversation.")
+                return None
             except Exception as err:
                 logger.warning("LLM summarization failed (%s); using fallback.", err)
         if not summary_text:

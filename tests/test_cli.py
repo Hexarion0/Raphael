@@ -52,8 +52,9 @@ def test_env_listening_defaults_and_cli_overrides(tmp_path, monkeypatch, argumen
         ("My favorite game is CS2.", {}, "I've saved that. Your favorite game is CS2."),
     ],
 )
+@pytest.mark.parametrize("launch_args", [["--listen"], ["start"]])
 def test_listen_wake_or_uncertain_speech_does_not_call_provider(
-    tmp_path, monkeypatch, text, wake_info, expected_reply
+    tmp_path, monkeypatch, text, wake_info, expected_reply, launch_args
 ):
     from datetime import datetime
 
@@ -90,7 +91,7 @@ def test_listen_wake_or_uncertain_speech_does_not_call_provider(
     monkeypatch.setattr(__main__, "time", SimpleNamespace(
         sleep=interrupt, monotonic=__main__.time.monotonic,
     ))
-    monkeypatch.setattr(sys, "argv", ["raphael", "--listen"])
+    monkeypatch.setattr(sys, "argv", ["raphael", *launch_args])
     assert __main__.main() == 0
     assert followup == [True]
     router.send.assert_not_called()

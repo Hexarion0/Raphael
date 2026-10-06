@@ -96,5 +96,11 @@ echo "      RAPHAEL Installation & Setup Completed Successfully!       "
 echo "  ================================================================"
 echo -e "${NC}"
 echo -e "To start listening:"
-echo -e "   ${GREEN}source .venv/bin/activate${NC}"
-echo -e "   ${GREEN}python -m raphael --listen${NC}\n"
+if [[ "${SHELL##*/}" == "fish" ]]; then
+    echo -e "   ${GREEN}source .venv/bin/activate.fish${NC}"
+else
+    echo -e "   ${GREEN}source .venv/bin/activate${NC}"
+fi
+echo -e "   ${GREEN}raphael start${NC}"
+echo -e "Or run directly without activating the environment:"
+echo -e "   ${GREEN}.venv/bin/raphael start${NC}\n"

@@ -1,5 +1,6 @@
 """Voice utterance recorder with silence / VAD energy cutoff."""
 
+import time
 from collections.abc import Callable
 
 import numpy as np
@@ -38,6 +39,8 @@ class VoiceRecorder:
         self._speech_start_time = 0.0
         self._last_speech_time = 0.0
         self._start_time = 0.0
+        self.capture_started_at = 0.0
+        self.last_speech_observed_at: float | None = None
 
     def start(self) -> None:
         """Begin accumulating speech audio frames."""
@@ -46,6 +49,8 @@ class VoiceRecorder:
         self._speech_started = False
         self._start_time = 0.0
         self._sample_count = 0
+        self.capture_started_at = time.monotonic()
+        self.last_speech_observed_at = None
         self._speech_start_time = self._start_time
         self._last_speech_time = self._start_time
         logger.info("🎙️ Utterance recording started. Listening for speech...")
@@ -75,6 +80,7 @@ class VoiceRecorder:
             else rms >= self.silence_threshold_rms
         )
         if is_speech:
+            self.last_speech_observed_at = time.monotonic()
             if not self._speech_started:
                 self._speech_started = True
                 self._speech_start_time = now

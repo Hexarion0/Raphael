@@ -73,8 +73,11 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 cp .env.example .env   # add your API keys
-python -m raphael --listen
+raphael start
 ```
+
+In fish, activate with `source .venv/bin/activate.fish`. You can also launch directly
+without activating the environment with `.venv/bin/raphael start`.
 
 Training dependencies are optional: use `pip install -e ".[train]"` for custom
 wake-word training. Piper voice fine-tuning uses the separate environment expected

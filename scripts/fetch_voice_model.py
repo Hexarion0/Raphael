@@ -1,0 +1,117 @@
+"""Inventory and fetch one official cloning candidate, excluding redundant artifacts."""
+
+from __future__ import annotations
+
+import argparse
+import fnmatch
+import json
+from pathlib import Path
+
+CANDIDATES = {
+    "chatterbox500": (
+        "ResembleAI/chatterbox",
+        ["t3_cfg.safetensors", "s3gen.safetensors", "ve.safetensors", "tokenizer.json"],
+    ),
+    "chatterbox-turbo": (
+        "ResembleAI/chatterbox-turbo",
+        [
+            "t3_turbo_v1.safetensors",
+            "s3gen_meanflow.safetensors",
+            "ve.safetensors",
+            "*.json",
+            "*.txt",
+        ],
+    ),
+    "chatterbox-nano": (
+        "ResembleAI/chatterbox-nano",
+        [
+            "t3_nano_v1.safetensors",
+            "s3gen_meanflow.safetensors",
+            "ve.safetensors",
+            "*.json",
+            "*.txt",
+        ],
+    ),
+    "cosyvoice3": (
+        "FunAudioLLM/Fun-CosyVoice3-0.5B-2512",
+        [
+            "llm.pt",
+            "flow.pt",
+            "hift.pt",
+            "campplus.onnx",
+            "speech_tokenizer_v3.onnx",
+            "cosyvoice3.yaml",
+            "*.json",
+            "CosyVoice-BlankEN/*.json",
+            "CosyVoice-BlankEN/*.txt",
+        ],
+    ),
+    "qwen06": (
+        "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
+        [
+            "*.json",
+            "*.txt",
+            "model.safetensors",
+            "speech_tokenizer/*.json",
+            "speech_tokenizer/model.safetensors",
+        ],
+    ),
+}
+
+
+def main() -> None:
+    """Pin repository revision and inventory sizes before a bounded download."""
+    from huggingface_hub import HfApi, hf_hub_download
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("candidate", choices=CANDIDATES)
+    parser.add_argument("--root", type=Path, default=Path("data/voice/models"))
+    parser.add_argument("--inventory-only", action="store_true")
+    parser.add_argument("--analysis-only", action="store_true", help="Fetch just speaker encoder")
+    parser.add_argument("--max-bytes", type=int, default=6_000_000_000)
+    args = parser.parse_args()
+    repo, patterns = CANDIDATES[args.candidate]
+    directory = args.root / args.candidate
+    directory.mkdir(parents=True, exist_ok=True)
+    inventory_path = directory / "inventory.json"
+    if inventory_path.exists():
+        inventory = json.loads(inventory_path.read_text())
+    else:
+        info = HfApi().model_info(repo, files_metadata=True)
+        files = [
+            {"path": s.rfilename, "bytes": s.size or 0}
+            for s in info.siblings
+            if any(fnmatch.fnmatch(s.rfilename, p) for p in patterns)
+        ]
+        inventory = {
+            "repository": repo,
+            "revision": info.sha,
+            "files": files,
+            "selected_bytes": sum(f["bytes"] for f in files),
+        }
+        inventory_path.write_text(json.dumps(inventory, indent=2) + "\n")
+    print(json.dumps(inventory, indent=2), flush=True)
+    if args.inventory_only:
+        return
+    files = inventory["files"]
+    if args.analysis_only:
+        if args.candidate not in {"chatterbox-turbo", "chatterbox-nano"}:
+            parser.error("--analysis-only is available only for Chatterbox's speaker encoder")
+        files = [f for f in files if f["path"] == "ve.safetensors"]
+    if sum(f["bytes"] for f in files) > args.max_bytes:
+        parser.error(
+            "Selected files exceed the download budget; inspect inventory before proceeding"
+        )
+    for file in files:
+        hf_hub_download(
+            repo,
+            file["path"],
+            revision=inventory["revision"],
+            local_dir=directory,
+            cache_dir=args.root.parent / "cache/huggingface",
+        )
+        print(f"Verified download: {file['path']}", flush=True)
+
+
+if __name__ == "__main__":
+    main()

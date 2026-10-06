@@ -26,6 +26,21 @@ training/raw/**
 checkpoints/
 results/
 
+# Custom voice experiments and downloads (all generated media stays private)
+/voices/
+/benchmarks/
+/model_cache/
+*.safetensors
+*.ckpt
+*.pth
+*.pt
+*.part
+*.ytdl
+*.webm
+*.m4a
+*.opus
+*.mp4
+
 
 # C extensions
 *.so

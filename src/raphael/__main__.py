@@ -24,6 +24,7 @@ def main() -> int:
         default="run",
         choices=[
             "run",
+            "start",
             "listen",
             "setup",
             "record-samples",
@@ -156,6 +157,7 @@ def main() -> int:
         return 0
 
     from raphael.config import get_settings
+    from raphael.latency import active_trace, latency_phase, mark
     from raphael.logging import setup_logging
     from raphael.memory import ConversationManager, MemoryStore
     from raphael.memory.context import recall_context_memories
@@ -206,7 +208,7 @@ def main() -> int:
         settings.providers.ollama_host,
     )
 
-    if args.listen or args.command == "listen" or (
+    if args.listen or args.command in {"start", "listen"} or (
         args.command == "run" and (settings.audio.ambient_listening or args.ambient is not None)
     ):
         from raphael.audio import (
@@ -216,6 +218,7 @@ def main() -> int:
             WakeListenerLoop,
             WakeWordDetector,
         )
+        from raphael.audio.speech_events import speech_event_instruction, strip_speech_events
 
         logger.info("Initializing wake-word, TTS, and STT engines (STT loads in background)...")
         detector = WakeWordDetector(
@@ -288,7 +291,12 @@ def main() -> int:
                 prompt_settings = settings.model_copy(
                     update={"raphael_preferred_name": profile_name.metadata["value"]}
                 )
-            return generate_system_prompt(settings=prompt_settings, memories=recalled_memories)
+            prompt = generate_system_prompt(
+                settings=prompt_settings, memories=recalled_memories
+            )
+            if tts.engine == "chatterbox_turbo":
+                prompt += speech_event_instruction(enabled=True)
+            return prompt
 
         _wait_re = re.compile(
             r"^(wait|hold\s+on|hang\s+on|one\s+sec(ond)?|pause)[.?!]*$",
@@ -306,7 +314,7 @@ def main() -> int:
 
         def show_spoken_sentence(text: str) -> None:
             if captions is not None:
-                captions.start(tts.clean_text_for_speech(text))
+                captions.start(strip_speech_events(tts.clean_text_for_speech(text)))
 
         def show_speech_progress(visible: str, finished: bool, interrupted: bool) -> None:
             if captions is not None:
@@ -316,15 +324,20 @@ def main() -> int:
             if not loop.is_running or (cancel_event is not None and cancel_event.is_set()):
                 return False
             controls = {}
+            trace = active_trace.get()
             progress_seen = [False]
             if cancel_event is not None:
                 controls["cancel_event"] = cancel_event
-            if show_ai_transcripts:
-                def audio_started() -> None:
+            def audio_started() -> None:
+                if trace is not None:
+                    trace.mark("first_audio_playback")
+                if show_ai_transcripts:
                     if loop.is_running and (cancel_event is None or not cancel_event.is_set()):
                         show_spoken_sentence(text)
 
+            if trace is not None or show_ai_transcripts:
                 controls["on_start"] = audio_started
+            if show_ai_transcripts:
                 def progress(visible: str, finished: bool, interrupted: bool) -> None:
                     if (
                         loop.is_running and (cancel_event is None or not cancel_event.is_set())
@@ -334,6 +347,7 @@ def main() -> int:
 
                 controls["on_progress"] = progress
             try:
+                mark("local_tts_requested")
                 spoken = tts.speak(text, block=block, **controls)
             except Exception as err:
                 if not playback_captions:
@@ -361,6 +375,7 @@ def main() -> int:
             return []
 
         def on_transcription(text: str, wake_info: dict, audio_data) -> bool:
+            mark("transcription_callback_started")
             cancel_event = wake_info.get("cancel_event")
 
             def current() -> bool:
@@ -397,24 +412,28 @@ def main() -> int:
                 earlier_fragments = []
                 logger.info("Resuming the pending request after an empty interruption.")
             decision = None
+            mark("speech_gate_started")
             if ambient_enabled[0]:
                 if restored_fragments:
                     decision = SpeechDecision(True, reason="resumed_after_empty_audio")
                 else:
-                    decision = ambient_context.decide(
-                        user_text or (raw if wake_info.get("stt_needs_repeat") else ""),
-                        router,
-                        [
-                            # Do not include unrelated session summaries or saved facts.
-                            # Only the last exchange helps determine a possible follow-up.
-                            ChatMessage(turn.role, turn.content)
-                            for turn in conv_manager.get_recent_turns(limit=4)
-                        ],
-                        started_at=wake_info.get("speech_started_at"),
-                        verified_wake=bool(wake_info.get("wake_verified")),
-                        during_reply=bool(wake_info.get("during_reply")),
-                        unfinished_request=earlier_fragments,
-                    )
+                    with latency_phase("speech_gate"):
+                        decision = ambient_context.decide(
+                            user_text or (raw if wake_info.get("stt_needs_repeat") else ""),
+                            router,
+                            [
+                                # Only the last exchange helps identify a follow-up.
+                                ChatMessage(turn.role, turn.content)
+                                for turn in conv_manager.get_recent_turns(limit=4)
+                            ],
+                            started_at=wake_info.get("speech_started_at"),
+                            verified_wake=bool(wake_info.get("wake_verified")),
+                            during_reply=bool(wake_info.get("during_reply")),
+                            unfinished_request=earlier_fragments,
+                            cancel_event=cancel_event,
+                        )
+                mark("speech_gate_finished", addressed=decision.addressed,
+                     reason=decision.reason)
                 logger.info(
                     "Ambient decision: %s (%s; intent_confidence=%s).",
                     "reply" if decision.addressed else "silent", decision.reason,
@@ -423,6 +442,8 @@ def main() -> int:
                 if not current() or not decision.addressed:
                     return False
                 ambient_context.record_addressed("user", user_text or raw)
+            else:
+                mark("speech_gate_finished", reason="disabled")
             if wake_info.get("stt_needs_repeat"):
                 logger.info("Speech was unclear; asking for a repeat instead of sending a guess.")
                 say("I didn't catch that clearly. Could you say it again?")
@@ -447,6 +468,7 @@ def main() -> int:
                 cleaned_query, re.I,
             )
             if mode_off or mode_on:
+                mark("local_intent_resolved", intent="listening_mode")
                 pending_speech.clear()
                 unfinished_request[0] = {}
                 enabled = bool(mode_on)
@@ -469,6 +491,7 @@ def main() -> int:
 
             # Check if user requested pause / wait
             if _wait_re.search(cleaned_query):
+                mark("local_intent_resolved", intent="wait")
                 logger.info("⏸️ Pause requested ('%s') — allowing more time.", cleaned_query)
                 say("Take your time.")
                 _in_followup[0] = True
@@ -476,6 +499,7 @@ def main() -> int:
 
             # Check if user requested immediate stop / cancel
             if _stop_re.search(cleaned_query):
+                mark("local_intent_resolved", intent="stop")
                 pending_speech.clear()
                 unfinished_request[0] = {}
                 logger.info("🛑 Stop requested ('%s') — returning to standby.", cleaned_query)
@@ -491,6 +515,7 @@ def main() -> int:
             )
             memory_reply = memory_service.handle(cleaned_query) if allow_memory else None
             if memory_reply is not None:
+                mark("local_intent_resolved", intent="memory")
                 conv_manager.add_turn(role="user", content=cleaned_query)
                 conv_manager.add_turn(
                     role="assistant", content=memory_reply, provider="local", model="memory",
@@ -502,6 +527,7 @@ def main() -> int:
 
             # Check for farewell in the user's query before calling the AI
             if is_farewell(cleaned_query):
+                mark("local_intent_resolved", intent="farewell")
                 pending_speech.clear()
                 unfinished_request[0] = {}
                 logger.info("👋 Farewell detected in user query — ending session.")
@@ -530,6 +556,7 @@ def main() -> int:
             )
             local_reply = answer_clock_query(clock_query)
             if local_reply is not None and not earlier_fragments and not added_speech:
+                mark("local_intent_resolved", intent="clock")
                 conv_manager.add_turn(
                     role="assistant", content=local_reply, provider="local", model="clock",
                 )
@@ -541,6 +568,7 @@ def main() -> int:
                 return True
 
             # Build sliding context window messages with system persona & recalled memories
+            mark("context_build_started")
             system_prompt = build_system_prompt(cleaned_query)
             if earlier_fragments or added_speech or wake_info.get("response_pending"):
                 system_prompt += (
@@ -582,6 +610,8 @@ def main() -> int:
                 "The original transcript stays the record. Never claim a guess was saved."
             )
             context_messages = conv_manager.get_active_messages(system_prompt=system_prompt)
+            mark("context_build_finished", messages=len(context_messages),
+                 chars=sum(len(m.content) for m in context_messages))
             if earlier_fragments or added_speech or restored_fragments:
                 # Keep each original transcript in SQLite, but present this pending
                 # request as one user message to the model. Remove matching tail
@@ -750,6 +780,24 @@ def main() -> int:
 
             restore_caption_logging = install_caption_logging(captions)
         try:
+            if tts.enabled and tts.engine == "chatterbox_turbo":
+                logger.info(
+                    "Preparing Chatterbox Turbo before enabling listening; "
+                    "first startup can take several seconds."
+                )
+                warmup_started = time.monotonic()
+                if stt.wait_ready(timeout=120):
+                    warmed = tts.warmup()
+                    logger.info(
+                        "Turbo startup preparation finished in %.2fs (%s).",
+                        time.monotonic() - warmup_started,
+                        "voice ready" if warmed else "local fallback available",
+                    )
+                else:
+                    logger.warning(
+                        "STT did not become ready within 120s; starting listener and "
+                        "deferring Turbo initialization."
+                    )
             loop.start()
             if ambient_enabled[0]:
                 logger.info(
@@ -772,10 +820,13 @@ def main() -> int:
                 if captions is not None:
                     captions.close()
             finally:
-                if restore_caption_logging is not None:
-                    restore_caption_logging()
+                try:
+                    if restore_caption_logging is not None:
+                        restore_caption_logging()
+                finally:
+                    tts.close()
 
-    logger.info("Ready. Use 'python -m raphael --listen' for live voice listening.")
+    logger.info("Ready. Use 'raphael start' for live voice listening.")
     logger.info("Use 'python -m raphael record-samples' to record voice samples.")
     logger.info("Use 'python -m raphael train-wake' to train a personalized wake model.")
     return 0

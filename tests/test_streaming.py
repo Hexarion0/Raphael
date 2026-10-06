@@ -1,13 +1,14 @@
 """Concurrency regressions for first-sentence playback and canceled replies."""
 
 import threading
+import time
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
 
-from raphael.audio.streaming import SentenceBuffer, VisibleText, stream_reply
+from raphael.audio.streaming import SentenceBuffer, VisibleText, _SentencePipeline, stream_reply
 from raphael.audio.tts import TextToSpeech
 from raphael.providers.base import ChatMessage, LLMStreamChunk
 
@@ -84,6 +85,85 @@ def test_first_sentence_plays_before_provider_finishes(speech, monkeypatch):
     assert result.spoken and not result.canceled and len(played) == 2
     assert result.first_token_seconds is not None and result.first_audio_seconds is not None
     assert tts.stop() is None
+
+
+def test_turbo_pipeline_synthesizes_next_sentence_during_playback():
+    first_started = threading.Event()
+    second_prepared = threading.Event()
+    finished = threading.Event()
+    played = []
+
+    class TurboPipelineStub:
+        supports_sentence_pipeline = True
+        audio_queue_size = 1
+
+        def begin_stream(self):
+            return 3
+
+        def update_stream(self, _generation, _text):
+            pass
+
+        def prepare_sentence(self, text, cancel_event, _generation):
+            if cancel_event.is_set():
+                return None
+            if text == "Second sentence.":
+                second_prepared.set()
+            return (text, 24000, None)
+
+        def speak(self, text, *, on_start, _prepared, **_kwargs):
+            assert _prepared[0] == text
+            on_start()
+            played.append(text)
+            if text == "First sentence.":
+                first_started.set()
+                assert second_prepared.wait(1), "Next sentence waited for playback to end"
+                time.sleep(0.04)
+            return True
+
+        def end_stream(self, _generation):
+            finished.set()
+
+    tts = TurboPipelineStub()
+
+    def generate(*_args, **_kwargs):
+        yield chunk("First sentence. ")
+        assert first_started.wait(1)
+        yield chunk("Second sentence.")
+
+    result = stream_reply(SimpleNamespace(stream=generate), [], tts, lambda: True)
+    assert result.spoken and not result.canceled
+    assert played == ["First sentence.", "Second sentence."]
+    assert result.first_audio_seconds is not None
+    assert result.speech_pipeline["sentences"][1]["synthesis_finished_seconds"] < (
+        result.speech_pipeline["sentences"][0]["playback_started_seconds"] + 0.04
+    )
+    assert finished.is_set()
+
+
+def test_barge_in_while_bounded_sentence_queue_is_full_does_not_deadlock():
+    preparing, interrupted = threading.Event(), threading.Event()
+
+    class BlockedPipelineStub:
+        audio_queue_size = 1
+
+        def prepare_sentence(self, _text, cancel_event, _generation):
+            preparing.set()
+            cancel_event.wait(1)
+            return None
+
+    pipeline = _SentencePipeline(
+        BlockedPipelineStub(), 1, lambda: not interrupted.is_set(), None,
+        time.monotonic(), lambda _text: None, None,
+    )
+    assert pipeline.submit("First.", time.monotonic())
+    assert preparing.wait(1)
+    assert pipeline.submit("Second.", time.monotonic())
+    finisher = threading.Thread(target=lambda: pipeline.finish(cancel=False))
+    finisher.start()
+    time.sleep(0.05)
+    interrupted.set()
+    finisher.join(timeout=1)
+    assert not finisher.is_alive(), "queue sentinel wait ignored barge-in"
 
 
 def test_sentence_callback_arrives_at_playback_before_generation_finishes(speech):
@@ -184,6 +264,7 @@ def test_canceled_synthesis_does_not_report_canceled_or_queued_sentences(
 ):
     tts, played = speech
     entered, release, cancel, finished, synthesized = (threading.Event() for _ in range(5))
+    first_started = threading.Event()
     observed, results = [], []
 
     def synthesize(text):
@@ -198,10 +279,15 @@ def test_canceled_synthesis_does_not_report_canceled_or_queued_sentences(
     monkeypatch.setattr(tts, "synthesize", synthesize)
     router = SimpleNamespace(stream=lambda *a, **k: iter([chunk("First. Second. Third. ")]))
 
+    def on_sentence_start(text):
+        observed.append(text)
+        if text == "First.":
+            first_started.set()
+
     def run():
         results.append(stream_reply(
             router, [], tts, lambda: not cancel.is_set(), cancel_event=cancel,
-            on_sentence_start=observed.append,
+            on_sentence_start=on_sentence_start,
         ))
         finished.set()
 
@@ -209,6 +295,8 @@ def test_canceled_synthesis_does_not_report_canceled_or_queued_sentences(
     worker.start()
     try:
         assert entered.wait(1)
+        if cancel_sentence == "Second.":
+            assert first_started.wait(1)
         cancel.set()
         tts.stop()
         assert finished.wait(0.5), "Canceled synthesis delayed the new utterance"
