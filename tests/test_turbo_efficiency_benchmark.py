@@ -1,6 +1,7 @@
 """Guard the isolated benchmark's thermal stops and incomplete-run reporting."""
 
 import importlib.util
+import json
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -27,6 +28,16 @@ def test_guard_stops_at_cutoff():
     monitor.cutoff = 85
     with pytest.raises(RuntimeError, match="Thermal stop"):
         monitor.guard()
+
+
+def test_guard_preserves_telemetry_before_worker_can_be_killed(tmp_path):
+    monitor = object.__new__(benchmark.Telemetry)
+    monitor.rows = [{"time": time.perf_counter(), "temperature_c": 85}]
+    monitor.cutoff = 85
+    monitor.checkpoint_path = tmp_path / "telemetry.json"
+    with pytest.raises(RuntimeError, match="Thermal stop"):
+        monitor.guard()
+    assert json.loads(monitor.checkpoint_path.read_text()) == monitor.rows
 
 
 def test_failed_repeated_workload_keeps_partial_result(monkeypatch, tmp_path):

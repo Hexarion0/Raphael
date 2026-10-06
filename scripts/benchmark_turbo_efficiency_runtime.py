@@ -16,6 +16,7 @@ import soundfile as sf
 from benchmark_raphael_turbo_runtime import FixedStream
 from benchmark_turbo_efficiency import write_json
 
+from raphael.audio.native import sd
 from raphael.audio.streaming import stream_reply
 from raphael.audio.tts import TextToSpeech
 from raphael.providers.base import ChatMessage
@@ -45,7 +46,23 @@ def main() -> None:
             filename = f"{current[0]['name']}-{index}.wav"
             sf.write(out / filename, _prepared[0], _prepared[1], subtype="FLOAT")
             current[0]["audio"].append(filename)
-        return original(text, *args, _prepared=_prepared, **kwargs)
+        timing = {}
+        start_callback = kwargs.get("on_start")
+
+        def started():
+            stream = sd.get_stream()
+            timing.update(started_at=time.perf_counter(), latency=stream.latency,
+                          rate=stream.samplerate)
+            if start_callback:
+                start_callback()
+
+        kwargs["on_start"] = started
+        result = original(text, *args, _prepared=_prepared, **kwargs)
+        timing["ended_at"] = time.perf_counter()
+        if "started_at" in timing:
+            timing["active_seconds"] = timing["ended_at"] - timing["started_at"]
+        current[0].setdefault("device_timing", []).append(timing)
+        return result
 
     tts.speak = save_speak
     try:

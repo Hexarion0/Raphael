@@ -28,12 +28,39 @@ def main() -> None:
         for row in report.get("modes", {}).get("baseline", {}).get("samples", []):
             reference[(row["text"], row["seed"])] = (folder / "baseline" / row["audio"], row)
     sections, comparisons, plots = [], [], []
+    quick_modes = {
+        "FP32 baseline": "controlled-precision/baseline",
+        "12 ms pacing": "screen-2/pace12",
+        "16 ms pacing": "pace16/pace16",
+        "Reference encoders on CPU": "screen-2/offload",
+        "Native FP16 T3": "native-half/native_half_t3",
+        "CPU vocoder": "screen-2/cpu_hift",
+    }
+    quick = ["<h2>Direct listening comparison</h2><div style='overflow-x:auto'><table><tr>"
+             "<th>Sentence</th>" + "".join(f"<th>{name}</th>" for name in quick_modes)
+             + "</tr>"]
+    for case in ("normal", "technical"):
+        quick.append(f"<tr><th>{case}</th>")
+        for folder in quick_modes.values():
+            path = root / folder / f"{case}.wav"
+            href = html.escape(str(path.relative_to(root)))
+            control = (f"<audio controls preload='none' src='{href}'></audio>"
+                       if path.exists() else "Not completed")
+            quick.append(f"<td style='min-width:200px'>{control}</td>")
+        quick.append("</tr>")
+    quick.append("</table></div>")
+    sections.extend(quick)
     for folder, report in reports:
         sections.append(f"<h2>{html.escape(folder.name)}</h2>")
         if report.get("errors"):
             sections.append(f"<pre>{html.escape(json.dumps(report['errors'], indent=2))}</pre>")
         for mode, info in report.get("modes", {}).items():
             sections.append(f"<h3>{html.escape(mode)}</h3>")
+            for name in ("word_checks.json", "similarity-chatterbox.json"):
+                path = folder / mode / name
+                if path.exists():
+                    href = html.escape(str(path.relative_to(root)))
+                    sections.append(f"<p><a href='{href}'>{html.escape(name)}</a></p>")
             body = []
             for row in info.get("samples", []):
                 path = folder / mode / row["audio"]
@@ -112,13 +139,29 @@ def main() -> None:
         sections.append(f"<h2>Actual RAPHAEL playback: {html.escape(report['mode'])}</h2>")
         for row in report["cases"]:
             gaps = row["pipeline"]["playback_gaps"]
+            durations = [sf.info(path.parent / name).duration for name in row["audio"]]
+            active = row["total_seconds"] - (row["first_audio_seconds"] or 0)
+            suspicious = active > sum(durations) * 1.3 + 0.2
+            for device, duration in zip(row.get("device_timing", []), durations):
+                suspicious |= device.get("active_seconds", 0) > duration * 1.3 + 0.1
+            if suspicious:
+                sections.append("<p class='notice'>Playback stayed active substantially longer "
+                                "than the saved PCM. Small inter-call gaps do not establish "
+                                "continuous real-time speech in this run.</p>")
+            if row["fallback"]:
+                sections.append("<p class='notice'>FAILED Turbo conversation: the benchmark "
+                                "thermal guard triggered and the last sentence used Piper. "
+                                "This is not a successful quiet-mode result.</p>")
             sections.append(f"<p>{html.escape(row['name'])}: first playback "
                             f"{number(row['first_audio_seconds'])} s, mean gap "
                             f"{number(statistics.mean(gaps) if gaps else None, 3)} s, "
                             f"fallback: {row['fallback']}</p>")
             for name in row["audio"]:
                 href = html.escape(str((path.parent / name).relative_to(root)))
-                sections.append(f"<audio controls preload='none' src='{href}'></audio>")
+                fallback = row["fallback"] and sf.info(path.parent / name).samplerate == 22050
+                label = "Piper fallback" if fallback else "Turbo experiment"
+                sections.append(f"<p>{html.escape(name)} — {label}<br>"
+                                f"<audio controls preload='none' src='{href}'></audio></p>")
     (root / "pcm-comparisons.json").write_text(json.dumps(comparisons, indent=2) + "\n")
     page = """<!doctype html><meta charset="utf-8"><title>Turbo efficiency experiments</title>
 <style>body{font:16px system-ui;margin:2rem;color:#18202a;background:#fafafa}
@@ -128,6 +171,7 @@ canvas{width:100%;max-width:1100px;background:white;border:1px solid #ccd}h2{mar
 .notice{padding:1rem;background:#fff0cc;max-width:1000px}</style>
 <h1>Chatterbox Turbo: workload and quality experiments</h1>
 <p class="notice">Production is unchanged. Same primary reference and sampling defaults.
+No sustained quiet mode passed validation. Planned 120-second tests hit the thermal guard.
 Temperature-limited runs are incomplete, not sustained thermal successes. Whole-board power
 includes the desktop. Differing fan/start temperatures and aborted durations invalidate simple
 temperature or average-energy rankings. Stage timings are instrumented; real playback appears

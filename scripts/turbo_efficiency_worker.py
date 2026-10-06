@@ -20,6 +20,7 @@ def run() -> int:
     mode = os.environ["RAPHAEL_BENCH_TURBO_MODE"]
     output = Path(os.environ["RAPHAEL_BENCH_TELEMETRY"])
     monitor = Telemetry(85)
+    monitor.checkpoint_path = output
     contexts = []
     original = ChatterboxTurboTTS.prepare_conditionals
 

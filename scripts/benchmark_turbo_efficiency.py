@@ -90,6 +90,11 @@ class Telemetry:
         if not self.rows or time.perf_counter() - self.rows[-1]["time"] > 2:
             raise RuntimeError("GPU telemetry unavailable; refusing unmonitored workload")
         if self.rows[-1]["temperature_c"] >= self.cutoff:
+            checkpoint = getattr(self, "checkpoint_path", None)
+            if checkpoint is not None:
+                # The parent may forcibly close the worker as soon as it sees the
+                # error, so persist before raising rather than relying on finally.
+                write_json(checkpoint, self.rows)
             raise RuntimeError(f"Thermal stop at {self.rows[-1]['temperature_c']} C")
 
     def close(self) -> None:
