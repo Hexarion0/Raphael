@@ -65,9 +65,9 @@ print('   Checking Piper TTS voice model...')
 from piper.download_voices import download_voice
 tts_dir = Path('models/tts')
 tts_dir.mkdir(parents=True, exist_ok=True)
-if not (tts_dir / 'en_GB-alan-medium.onnx').is_file():
-    print('   Downloading en_GB-alan-medium voice model (~60MB)...')
-    download_voice('en_GB-alan-medium', tts_dir)
+if not (tts_dir / 'en_US-amy-medium.onnx').is_file():
+    print('   Downloading default Amy voice model (~60MB)...')
+    download_voice('en_US-amy-medium', tts_dir)
 print('   Piper voice ready.')
 
 print('   Checking faster-whisper base.en model...')
@@ -92,7 +92,7 @@ fi
 
 echo -e "\n${CYAN}${BOLD}"
 echo "  ================================================================"
-echo "      RAPHAEL Installation & Setup Completed Successfully!       "
+echo "      RAPHAEL Installation Finished — Review Setup Results      "
 echo "  ================================================================"
 echo -e "${NC}"
 echo -e "To start listening:"

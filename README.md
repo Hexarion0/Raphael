@@ -89,6 +89,14 @@ without activating the environment with `.venv/bin/raphael start`.
 Training dependencies are optional: use `pip install -e ".[train]"` for custom
 wake-word training. Normal listening does not import that toolchain.
 
+Run `raphael setup` to choose **[1] RAPHAEL custom voice** (Chatterbox Turbo,
+NVIDIA GPU) or **[2] default Amy** (Piper, CPU). New installations default to Amy;
+Enter preserves an existing voice selection. `bash setup.sh` downloads Amy as
+the standard voice. The custom option uses separately installed Turbo models,
+its Python environment, and your private reference audio/transcript; these assets
+are not included in Git. Setup lists missing custom assets and skips its audio
+test until they are installed. See [custom voice requirements](docs/chatterbox-turbo-integration.md).
+
 Run `pytest` for unit tests and `ruff check src tests` for linting. Tests requiring
 real devices, downloaded models, or wake-training dependencies are separate:
 `pytest -m integration`.
