@@ -1,9 +1,0 @@
-[
-  {"id": "09_comforting", "category": "caring / comforting", "text": "Hey, it's okay. You don't have to figure everything out tonight. I'm here with you."},
-  {"id": "10_concerned", "category": "concerned", "text": "You sound a little overwhelmed. Has something happened? Tell me what you need."},
-  {"id": "11_serious", "category": "serious", "text": "Please stop for a moment. This alert needs our attention. I'm checking it now."},
-  {"id": "12_happy", "category": "happy", "text": "You did it! Everything is working again. I'm really happy for you."},
-  {"id": "13_excited", "category": "excited", "text": "It's ready! Your project is finally running. Come and have a look!"},
-  {"id": "14_playful", "category": "playful", "text": "Oh, so now you're asking nicely? All right, I'll take care of it for you."},
-  {"id": "15_sleepy", "category": "calm / sleepy", "text": "There we go. Everything can wait until morning. Close your eyes and get some rest."}
-]

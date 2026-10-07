@@ -97,7 +97,7 @@ class AudioConfig(BaseModel):
     show_transcripts: bool = Field(default=False)
     barge_in_mode: Literal["speech", "wake"] = Field(default="wake")
     barge_in_speech_seconds: float = Field(default=0.24, ge=0.16, le=1.0)
-    ambient_followup_seconds: float = Field(default=20.0, ge=2, le=120)
+    ambient_followup_seconds: float = Field(default=300.0, ge=2, le=600)
     ambient_followup_policy: Literal["conversation", "strict"] = Field(default="conversation")
     wake_models: list[str] = Field(
         default_factory=list,
@@ -124,17 +124,17 @@ class AudioConfig(BaseModel):
     stt_retry_confidence: float = Field(default=0.55, ge=0.0, le=1.0)
     stt_retry_model: str | None = Field(default=None)
     stt_retry_min_free_mb: int = Field(default=2048, ge=0, le=65536)
-    utterance_silence_seconds: float = Field(default=1.0, ge=0.3, le=5.0)
-    utterance_pause_grace_seconds: float = Field(default=0.8, ge=0, le=3)
+    utterance_silence_seconds: float = Field(default=0.7, ge=0.3, le=5.0)
+    utterance_pause_grace_seconds: float = Field(default=0.2, ge=0, le=3)
     tts_engine: str = Field(
         default="auto",
         description=(
-            "TTS engine: auto, piper, edge_tts, fish_speech, or chatterbox_turbo"
+            "TTS engine: auto, piper, or chatterbox_turbo"
         ),
     )
     tts_voice: str = Field(
-        default="mommy",
-        description="TTS profile or voice name (raphael, Piper model, Edge voice, or Fish)",
+        default="en_US-amy-medium",
+        description="TTS profile or Piper voice name",
     )
     tts_fallback_voice: str = Field(
         default="en_US-raphael-medium",
@@ -155,30 +155,6 @@ class AudioConfig(BaseModel):
     )
     tts_streaming: bool = Field(default=True)
     show_ai_transcripts: bool = Field(default=False)
-    fish_speech_url: str = Field(
-        default="http://127.0.0.1:8080/v1/tts",
-        description="Local Fish Speech API server endpoint",
-    )
-    fish_ref_audio: str = Field(
-        default="data/voices/mommy/ref.wav",
-        description="Path to reference audio for zero-shot voice cloning",
-    )
-    fish_ref_text: str = Field(
-        default=(
-            "Oh my god, did I like break your ribs or something? "
-            "It's not my fault that you're fragile."
-        ),
-        description="Transcript of reference audio for zero-shot voice cloning",
-    )
-    fish_temperature: float = Field(default=0.7, description="Fish Speech sampling temperature")
-    fish_top_p: float = Field(default=0.7, description="Fish Speech top_p sampling")
-    fish_repetition_penalty: float = Field(
-        default=1.2, description="Fish Speech repetition penalty"
-    )
-    fish_chunk_length: int = Field(
-        default=200, description="Fish Speech chunk length for synthesis"
-    )
-    fish_max_new_tokens: int = Field(default=1024, description="Fish Speech max new tokens")
     sample_rate: int = Field(default=16000, description="Audio sample rate in Hz")
     channels: int = Field(default=1, description="Audio channel count (1 for mono)")
     input_device: int | str | None = Field(
@@ -241,7 +217,7 @@ class Settings(BaseSettings):
     show_transcripts: bool = Field(default=False)
     barge_in_mode: Literal["speech", "wake"] = Field(default="wake")
     barge_in_speech_seconds: float = Field(default=0.24, ge=0.16, le=1.0)
-    ambient_followup_seconds: float = Field(default=20.0, ge=2, le=120)
+    ambient_followup_seconds: float = Field(default=300.0, ge=2, le=600)
     ambient_followup_policy: Literal["conversation", "strict"] = Field(default="conversation")
     stt_model: str = Field(default="base.en")
     stt_device: str = Field(default="cpu")
@@ -252,10 +228,10 @@ class Settings(BaseSettings):
     stt_retry_confidence: float = Field(default=0.55, ge=0.0, le=1.0)
     stt_retry_model: str | None = Field(default=None)
     stt_retry_min_free_mb: int = Field(default=2048, ge=0, le=65536)
-    utterance_silence_seconds: float = Field(default=1.0, ge=0.3, le=5.0)
-    utterance_pause_grace_seconds: float = Field(default=0.8, ge=0, le=3)
+    utterance_silence_seconds: float = Field(default=0.7, ge=0.3, le=5.0)
+    utterance_pause_grace_seconds: float = Field(default=0.2, ge=0, le=3)
     tts_engine: str = Field(default="auto")
-    tts_voice: str = Field(default="mommy")
+    tts_voice: str = Field(default="en_US-amy-medium")
     tts_fallback_voice: str = Field(default="en_US-raphael-medium")
     tts_voice_profiles: str = Field(default="voice_profiles")
     tts_chatterbox_model: str = Field(default="data/voice/models/chatterbox-turbo")
@@ -266,19 +242,6 @@ class Settings(BaseSettings):
     tts_enabled: bool = Field(default=True)
     tts_streaming: bool = Field(default=True)
     show_ai_transcripts: bool = Field(default=False)
-    fish_speech_url: str = Field(default="http://127.0.0.1:8080/v1/tts")
-    fish_ref_audio: str = Field(default="data/voices/mommy/ref.wav")
-    fish_ref_text: str = Field(
-        default=(
-            "Oh my god, did I like break your ribs or something? "
-            "It's not my fault that you're fragile."
-        )
-    )
-    fish_temperature: float = Field(default=0.7)
-    fish_top_p: float = Field(default=0.7)
-    fish_repetition_penalty: float = Field(default=1.2)
-    fish_chunk_length: int = Field(default=200)
-    fish_max_new_tokens: int = Field(default=1024)
     audio_sample_rate: int = Field(default=16000)
     audio_channels: int = Field(default=1)
     audio_input_device: int | str | None = Field(default=None)
@@ -359,14 +322,6 @@ class Settings(BaseSettings):
             tts_enabled=self.tts_enabled,
             tts_streaming=self.tts_streaming,
             show_ai_transcripts=self.show_ai_transcripts,
-            fish_speech_url=self.fish_speech_url,
-            fish_ref_audio=self.fish_ref_audio,
-            fish_ref_text=self.fish_ref_text,
-            fish_temperature=self.fish_temperature,
-            fish_top_p=self.fish_top_p,
-            fish_repetition_penalty=self.fish_repetition_penalty,
-            fish_chunk_length=self.fish_chunk_length,
-            fish_max_new_tokens=self.fish_max_new_tokens,
             sample_rate=self.audio_sample_rate,
             channels=self.audio_channels,
             input_device=self.audio_input_device,

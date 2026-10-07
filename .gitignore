@@ -15,6 +15,16 @@ models/tts/
 *.onnx
 *.db
 *.sqlite3
+*.sqlite
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3-journal
+*.sqlite3-wal
+*.sqlite3-shm
 /:memory:.ses
 
 # Local training artifacts & piper datasets (keep the raw drop folder)
@@ -188,8 +198,12 @@ activemq-data/
 
 # Environments
 .env
+.env.*
+!.env.example
 .envrc
 .venv
+.venv-*/
+.venv.*/
 env/
 venv/
 ENV/
@@ -258,3 +272,14 @@ __marimo__/
 
 # Local contributor instructions
 /AGENTS.md
+
+# Local planning notes and interrupted persona writes
+/.grill/
+/.persona.txt.*
+
+# Editor backups and desktop metadata
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db

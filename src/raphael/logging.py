@@ -47,7 +47,46 @@ class RaphaelFormatter(logging.Formatter):
         super().__init__(fmt=self.FORMAT, datefmt=self.DATE_FORMAT)
 
 
-def setup_logging(log_level: str | None = None) -> logging.Logger:
+class ConciseLogFilter(logging.Filter):
+    """Keep conversational and operational INFO messages on normal startup."""
+
+    _VISIBLE_INFO = (
+        "🗣️ You:",
+        "🤖 RAPHAEL",
+        "Ready.",
+        "Wake detected!",
+        "Wake listener active",
+        "Microphone active",
+        "Utterance recording started",
+        "Heard during RAPHAEL reply",
+        "Merged ",
+        "Interrupted speech was unclear to STT",
+        "Interrupted speech wasn't merged",
+        "Wake keyword spotter ready",
+        "STT ready:",
+        "Chatterbox Turbo ready",
+        "Ambient listening active",
+        "Speech was unclear; asking for a repeat",
+    )
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._shown_readiness: set[str] = set()
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.levelno >= logging.WARNING:
+            return True
+        if record.levelno != logging.INFO:
+            return False
+        message = record.getMessage()
+        if any(token in message for token in ("ready:", "Turbo ready")):
+            if message in self._shown_readiness:
+                return False
+            self._shown_readiness.add(message)
+        return any(visible in message for visible in self._VISIBLE_INFO)
+
+
+def setup_logging(log_level: str | None = None, *, concise: bool = False) -> logging.Logger:
     """Initialize structured logging for RAPHAEL with secret masking."""
     if log_level is None:
         from raphael.config import get_settings
@@ -66,15 +105,20 @@ def setup_logging(log_level: str | None = None) -> logging.Logger:
     console_handler.setLevel(numeric_level)
     console_handler.setFormatter(RaphaelFormatter())
     console_handler.addFilter(SecretMaskingFilter())
+    if concise:
+        console_handler.addFilter(ConciseLogFilter())
 
     root_logger.addHandler(console_handler)
 
-    # Silence verbose external libraries
+    # Keep normal output focused; development mode exposes transport and decoder logs.
     logging.getLogger("urllib3").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("faster_whisper").setLevel(logging.WARNING)
     logging.getLogger("ctranslate2").setLevel(logging.WARNING)
+    if not concise:
+        for name in ("urllib3", "httpcore", "httpx", "faster_whisper", "ctranslate2"):
+            logging.getLogger(name).setLevel(logging.NOTSET)
 
     logger = logging.getLogger("raphael")
     return logger

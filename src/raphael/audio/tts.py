@@ -1,6 +1,4 @@
 import argparse
-import asyncio
-import io
 import json
 import os
 import queue
@@ -10,11 +8,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-import edge_tts
-import msgpack
 import numpy as np
-import requests
-import soundfile as sf
 from piper import PiperVoice
 from piper.config import SynthesisConfig
 from piper.download_voices import download_voice
@@ -28,23 +22,14 @@ from raphael.logging import get_logger
 
 logger = get_logger("audio.tts")
 
-_CUSTOM_PIPER_VOICES = {"custom_voice", "custom"}
-
-
 def resolve_tts_engine(voice_name: str, engine: str = "auto") -> str:
     """An explicit engine wins; otherwise choose the engine for the voice."""
     selected = engine.lower()
-    if selected == "fish":
-        selected = "fish_speech"
     if selected == "auto":
-        if voice_name.lower() in {"mommy", "fish_speech", "fish"}:
-            return "fish_speech"
-        if "neural" in voice_name.lower():
-            return "edge_tts"
         return "piper"
     if selected == "chatterbox":
         selected = "chatterbox_turbo"
-    if selected not in {"piper", "fish_speech", "edge_tts", "chatterbox_turbo"}:
+    if selected not in {"piper", "chatterbox_turbo"}:
         raise ValueError(f"Unknown TTS engine: {engine}")
     return selected
 
@@ -67,14 +52,6 @@ def resolve_piper_voice_paths(voice_name: str, models_dir: str | Path) -> tuple[
         if alt_json.is_file():
             json_file = alt_json
 
-    if voice_name.lower() in _CUSTOM_PIPER_VOICES or onnx_file.is_file():
-        if not onnx_file.is_file() or not json_file.is_file():
-            raise FileNotFoundError(
-                f"Custom Piper voice '{voice_name}' not found in {models}. "
-                "Run `python -m raphael prepare-voice` then `./scripts/train_piper_voice.sh`."
-            )
-        return onnx_file, json_file
-
     if not onnx_file.is_file() or not json_file.is_file():
         logger.info("Downloading Piper TTS voice model '%s'...", voice_name)
         download_voice(voice_name, models)
@@ -83,7 +60,7 @@ def resolve_piper_voice_paths(voice_name: str, models_dir: str | Path) -> tuple[
 
 
 class TextToSpeech:
-    """Local Piper, Edge, Fish Speech, or persistent Chatterbox Turbo speech."""
+    """Local Piper or persistent Chatterbox Turbo speech."""
 
     def __init__(
         self,
@@ -93,14 +70,6 @@ class TextToSpeech:
         speed: float | None = None,
         output_device: int | str | None = None,
         enabled: bool = True,
-        fish_speech_url: str | None = None,
-        fish_ref_audio: str | Path | None = None,
-        fish_ref_text: str | None = None,
-        fish_temperature: float | None = None,
-        fish_top_p: float | None = None,
-        fish_repetition_penalty: float | None = None,
-        fish_chunk_length: int | None = None,
-        fish_max_new_tokens: int | None = None,
         include_alignments: bool = False,
         tts_fallback_voice: str | None = None,
         voice_profiles_dir: str | Path | None = None,
@@ -140,27 +109,6 @@ class TextToSpeech:
         self._chatterbox_failed = False
         self._profile_data: dict | None = None
 
-        # Fish Speech zero-shot parameters
-        self.fish_speech_url = fish_speech_url or settings.fish_speech_url
-        self.fish_ref_audio = fish_ref_audio or settings.fish_ref_audio
-        self.fish_ref_text = fish_ref_text or settings.fish_ref_text
-        self.fish_temperature = (
-            fish_temperature if fish_temperature is not None else settings.fish_temperature
-        )
-        self.fish_top_p = fish_top_p if fish_top_p is not None else settings.fish_top_p
-        self.fish_repetition_penalty = (
-            fish_repetition_penalty
-            if fish_repetition_penalty is not None
-            else settings.fish_repetition_penalty
-        )
-        self.fish_chunk_length = (
-            fish_chunk_length if fish_chunk_length is not None else settings.fish_chunk_length
-        )
-        self.fish_max_new_tokens = (
-            fish_max_new_tokens if fish_max_new_tokens is not None else settings.fish_max_new_tokens
-        )
-
-        self._cached_ref_audio_bytes: bytes | None = None
         self._voice: PiperVoice | None = None
         self._fallback_voice: PiperVoice | None = None
         self._is_playing = False
@@ -188,14 +136,8 @@ class TextToSpeech:
                 logger.info(
                     "Chatterbox Turbo voice '%s' will load on its first request.", self.voice_name
                 )
-            elif self.engine in ("fish_speech", "fish"):
-                logger.info(
-                    "Fish Speech zero-shot engine ready (URL: %s, Voice: %s).",
-                    self.fish_speech_url,
-                    self.voice_name,
-                )
             else:
-                logger.info("Edge-TTS engine ready (voice: %s).", self.voice_name)
+                logger.info("Local Piper engine ready (voice: %s).", self.voice_name)
 
     def _ensure_model_files(self) -> tuple[Path, Path]:
         """Ensure voice model .onnx and .onnx.json files exist locally, downloading if necessary."""
@@ -217,38 +159,6 @@ class TextToSpeech:
             logger.warning("Failed to initialize Piper TTS: %s. Audio output disabled.", err)
             self._voice = None
             self.enabled = False
-
-    def _get_ref_audio_bytes(self) -> bytes | None:
-        """Load and cache reference audio bytes for zero-shot voice cloning."""
-        if self._cached_ref_audio_bytes is not None:
-            return self._cached_ref_audio_bytes
-
-        ref_path = Path(self.fish_ref_audio)
-        if not ref_path.is_file():
-            # Check relative to project root / current working dir
-            for candidate in [
-                Path.cwd() / self.fish_ref_audio,
-                Path(__file__).resolve().parent.parent.parent.parent / self.fish_ref_audio,
-                Path("/home/hexarion/Raphael") / self.fish_ref_audio,
-            ]:
-                if candidate.is_file():
-                    ref_path = candidate
-                    break
-
-        if ref_path.is_file():
-            try:
-                self._cached_ref_audio_bytes = ref_path.read_bytes()
-                logger.debug(
-                    "Loaded reference audio (%d bytes) from %s",
-                    len(self._cached_ref_audio_bytes),
-                    ref_path,
-                )
-                return self._cached_ref_audio_bytes
-            except Exception as err:
-                logger.warning("Failed to read reference audio '%s': %s", ref_path, err)
-        else:
-            logger.warning("Reference audio file not found at '%s'", self.fish_ref_audio)
-        return None
 
     @property
     def supports_sentence_pipeline(self) -> bool:
@@ -410,121 +320,6 @@ class TextToSpeech:
         clean = re.sub(r"\s+", " ", clean).strip()
         return clean
 
-    def _synthesize_fish_speech(self, text: str) -> tuple[np.ndarray, int] | None:
-        """Synthesize using local Fish Speech zero-shot TTS API server."""
-        ref_bytes = self._get_ref_audio_bytes()
-        references = []
-        if ref_bytes is not None and self.fish_ref_text:
-            references.append(
-                {
-                    "audio": ref_bytes,
-                    "text": self.fish_ref_text,
-                }
-            )
-
-        payload = {
-            "text": text,
-            "references": references,
-            "reference_id": None,
-            "max_new_tokens": self.fish_max_new_tokens,
-            "chunk_length": self.fish_chunk_length,
-            "top_p": self.fish_top_p,
-            "repetition_penalty": self.fish_repetition_penalty,
-            "temperature": self.fish_temperature,
-            "format": "wav",
-            "streaming": False,
-            "use_memory_cache": "on",
-            "seed": None,
-            "normalize": True,
-        }
-
-        try:
-            packed_data = msgpack.packb(payload, use_bin_type=True)
-            response = requests.post(
-                self.fish_speech_url,
-                data=packed_data,
-                headers={"Content-Type": "application/msgpack"},
-                timeout=40.0,
-            )
-            if response.status_code != 200:
-                logger.warning(
-                    "Fish Speech server returned HTTP %d: %s. Falling back...",
-                    response.status_code,
-                    response.text[:200],
-                )
-                return self._fallback_synthesize(text)
-
-            audio_data, sample_rate = sf.read(io.BytesIO(response.content))
-            if audio_data.ndim > 1:
-                audio_data = audio_data.mean(axis=1)
-            return audio_data.astype(np.float32), sample_rate
-
-        except Exception as err:
-            logger.warning("Fish Speech synthesis failed (%s). Falling back...", err)
-            return self._fallback_synthesize(text)
-
-    def _fallback_synthesize(self, text: str) -> tuple[np.ndarray, int] | None:
-        """Use installed local voices before attempting a network-based fallback."""
-        if self._fallback_voice is not None:
-            return self._synthesize_piper(text, voice=self._fallback_voice)
-        for name in dict.fromkeys([self.voice_name, "en_GB-alan-medium", "en_US-amy-medium"]):
-            onnx = self.models_dir / f"{name}.onnx"
-            config = onnx.with_suffix(".onnx.json")
-            if not config.is_file():
-                config = onnx.with_suffix(".json")
-            if not onnx.is_file() or not config.is_file():
-                continue
-            try:
-                self._fallback_voice = PiperVoice.load(
-                    model_path=str(onnx),
-                    config_path=str(config),
-                    use_cuda=False,
-                    **({"include_alignments": True} if self.include_alignments else {}),
-                )
-                logger.info("Using local Piper fallback voice '%s'.", name)
-                return self._synthesize_piper(text, voice=self._fallback_voice)
-            except Exception as err:
-                self._fallback_voice = None
-                logger.warning("Piper fallback '%s' failed: %s", name, err)
-        return self._synthesize_edge_tts(text)
-
-    def _synthesize_edge_tts(self, text: str) -> tuple[np.ndarray, int] | None:
-        """Synthesize using Microsoft Edge-TTS neural speech."""
-        rate_str = "+0%"
-        if abs(self.speed - 1.0) > 0.05:
-            pct = int((self.speed - 1.0) * 100)
-            rate_str = f"+{pct}%" if pct >= 0 else f"{pct}%"
-
-        edge_voice = self.voice_name
-        if "neural" not in edge_voice.lower():
-            edge_voice = "en-US-AvaNeural"
-
-        async def _run_edge():
-            communicate = edge_tts.Communicate(
-                text=text,
-                voice=edge_voice,
-                rate=rate_str,
-            )
-            raw_data = b""
-            async for chunk in communicate.stream():
-                if chunk["type"] == "audio":
-                    raw_data += chunk["data"]
-            return raw_data
-
-        try:
-            # Run in isolated event loop to support multi-threaded caller
-            raw_audio = asyncio.run(_run_edge())
-            if not raw_audio:
-                return None
-            audio_array, sample_rate = sf.read(io.BytesIO(raw_audio))
-            # Convert to float32 mono array
-            if audio_array.ndim > 1:
-                audio_array = audio_array.mean(axis=1)
-            return audio_array.astype(np.float32), sample_rate
-        except Exception as err:
-            logger.warning("Edge-TTS synthesis failed (%s). Falling back to Piper...", err)
-            return self._synthesize_piper(text)
-
     def _synthesize_piper(
         self,
         text: str,
@@ -578,10 +373,6 @@ class TextToSpeech:
         if self.engine == "chatterbox_turbo":
             return self._synthesize_chatterbox(clean_text)
         clean_text = strip_speech_events(clean_text)
-        if self.engine == "fish_speech":
-            return self._synthesize_fish_speech(clean_text)
-        elif self.engine == "edge_tts":
-            return self._synthesize_edge_tts(clean_text)
         return self._synthesize_piper(clean_text)
 
     def begin_stream(self) -> int:
@@ -882,7 +673,7 @@ if __name__ == "__main__":
         default="Hello! I am Raphael, your desktop companion.",
         help="Text to speak",
     )
-    parser.add_argument("--engine", default=None, help="TTS engine (fish_speech, edge_tts, piper)")
+    parser.add_argument("--engine", default=None, help="TTS engine (chatterbox_turbo or piper)")
     parser.add_argument("--voice", default=None, help="TTS voice name")
     args = parser.parse_args()
 
@@ -895,9 +686,6 @@ if __name__ == "__main__":
         engine=selected_engine,
         speed=app_settings.audio.tts_speed,
         output_device=app_settings.audio.output_device,
-        fish_speech_url=app_settings.audio.fish_speech_url,
-        fish_ref_audio=app_settings.audio.fish_ref_audio,
-        fish_ref_text=app_settings.audio.fish_ref_text,
     )
     print(f"Synthesizing: '{args.text}' [Engine: {tts.engine}, Voice: {tts.voice_name}]")
     success = tts.speak(args.text, block=True)

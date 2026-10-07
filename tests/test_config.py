@@ -87,6 +87,15 @@ def test_stt_quality_thresholds_are_exposed_and_validated():
         Settings(_env_file=None, stt_min_confidence=1.1)
 
 
+def test_default_speech_endpoint_allows_quick_conversation_turns():
+    from raphael.config import Settings
+
+    audio = Settings(_env_file=None).audio
+    assert audio.utterance_silence_seconds == 0.7
+    assert audio.utterance_pause_grace_seconds == 0.2
+    assert round(audio.utterance_silence_seconds + audio.utterance_pause_grace_seconds, 1) == 0.9
+
+
 def test_persona_file_can_be_configured_or_disabled():
     with patch.dict(os.environ, {}, clear=True):
         assert Settings(_env_file=None).raphael_persona_file == "persona.txt"
@@ -146,6 +155,7 @@ def test_followup_policy_is_configurable_and_validated():
 
     with patch.dict(os.environ, {}, clear=True):
         assert Settings(_env_file=None).audio.ambient_followup_policy == 'conversation'
+        assert Settings(_env_file=None).audio.ambient_followup_seconds == 300
     with patch.dict(os.environ, {'AMBIENT_FOLLOWUP_POLICY': 'strict'}, clear=True):
         assert Settings(_env_file=None).audio.ambient_followup_policy == 'strict'
     with pytest.raises(ValidationError):

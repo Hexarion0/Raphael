@@ -49,7 +49,7 @@ class SystemSnapshot:
     capabilities: list[str] = field(default_factory=list)
 
 
-def query_gpu_info() -> GpuInfo:
+def query_gpu_info(*, timeout: float = 1.5) -> GpuInfo:
     """Query NVIDIA GPU metrics via nvidia-smi if available."""
     nvsmi = shutil.which("nvidia-smi")
     if not nvsmi:
@@ -63,7 +63,7 @@ def query_gpu_info() -> GpuInfo:
                 "--format=csv,noheader,nounits",
             ],
             text=True,
-            timeout=1.5,
+            timeout=timeout,
             stderr=subprocess.DEVNULL,
         ).strip()
         if out:
@@ -83,7 +83,9 @@ def query_gpu_info() -> GpuInfo:
     return GpuInfo()
 
 
-def get_system_snapshot(settings: Settings | None = None) -> SystemSnapshot:
+def get_system_snapshot(
+    settings: Settings | None = None, *, gpu_timeout: float = 1.5,
+) -> SystemSnapshot:
     """Inspect and compile live system telemetry, host info, and RAPHAEL's toolset."""
     cfg = settings or get_settings()
 
@@ -149,7 +151,7 @@ def get_system_snapshot(settings: Settings | None = None) -> SystemSnapshot:
             pass
 
     # 3. GPU Info
-    gpu_info = query_gpu_info()
+    gpu_info = query_gpu_info(timeout=gpu_timeout)
 
     # 4. Providers
     providers = []

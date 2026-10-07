@@ -102,6 +102,74 @@ and private audio out of reports.
     used again and its temporary CUDA model must be released afterward. Record
     GPU memory and transcript quality; this does not prove hum rejection by itself.
 
+## Memory proposals and first local actions
+
+Run these checks on the target desktop after starting `raphael start`:
+
+1. Say “Raphael, my favorite game is CS2.” Expect a proposal, then say
+   “Raphael, no.” Verify no structured favorite-game fact was added or changed.
+2. Repeat the statement and say “Raphael, yes.” Close RAPHAEL, restart, then ask
+   “Raphael, what's my favorite game?” Expect CS2. Propose a different game and
+   reject it; the confirmed value must stay CS2. Use a disposable test fact if
+   you do not want to change your real preference.
+3. Propose another change, ask for the time, then say “Raphael, yes.” The old
+   proposal must not be saved. Repeat after waiting more than 60 seconds and
+   after “Raphael, cancel.” An inferred ambient yes must not authorize a write.
+4. Ask RAM usage, GPU temperature, and logical CPU core count using the exact
+   examples in README. Expect local answers, or an unavailable-metric response,
+   with no provider request. Compare against a system monitor.
+5. Say “Raphael, open Discord.” Verify a Discord or Vesktop window appears.
+   Check a supported but uninstalled app receives an honest missing-app response.
+   During ambient follow-up, say “Open Discord” without her name: it must not
+   launch. Paths, shell syntax, and command-line flags must never execute.
+6. Interrupt a spoken action result and verify voice listening remains responsive.
+   A completed launch is not undone by a later interruption.
+
+**Status:** live microphone, speaker, restart, and desktop-window acceptance is
+pending; the user deferred these checks until later. Automated callback tests use mocked audio and mocked launches. This
+status must only change after the real desktop checks have been observed.
+
+## Recorded validation — 2026-10-08 (Discord request routing)
+
+- 642 unit tests passed, with three integrations excluded. Ruff and whitespace
+  checks passed. Desktop launching was mocked during these tests.
+- The reported conversation contained misheard app names, an exact spelling
+  correction, and “Can you open it for me?” The narrow launch matcher sent the
+  request to conversational generation instead of the local action. Discord's
+  executable and installed host were present.
+- Launch matching now accepts polite commands and exact letter-by-letter app
+  spelling. Recent user corrections can resolve “open it” for 60 seconds;
+  unrelated requests, cancellation, restart, and uncertain speech invalidate it.
+  Direct-address authorization and the executable allowlist remain required.
+- Regression tests replay natural requests, corrections after interrupted speech,
+  and the follow-up launch through real CLI callbacks with mocked processes.
+- Retest after restart with “Raphael, can you open Discord for me?” If STT still
+  mishears the name, say “Raphael, I meant D I S C O R D,” then “Raphael, open it.”
+  Actual microphone recognition and window appearance still require a live retest.
+
+## Recorded validation — 2026-10-07 (memory proposals and local actions)
+
+- 617 unit tests passed; three hardware/model integrations excluded. Ruff and
+  whitespace checks passed.
+- The previously failing summary-routing test now mocks the streaming provider
+  path used by background summaries and still checks the economical model and
+  token limit.
+- Memory tests cover yes/no, proposal corrections, expiration, unrelated turns,
+  unauthorized confirmation, cancellation, restart persistence, and explicit
+  commands. Real CLI callbacks verify local acknowledgements and history.
+- Action tests cover discovery without core edits, duplicate names, ambiguous
+  requests, invalid arguments, executable allowlisting, direct-address permission,
+  cancellation, deadlines, unavailable telemetry/apps, and handler failures.
+  Application launches and microphone input are mocked in automated tests.
+- Piper initialization and synthesis passed using the Alan model after downloading
+  the missing model. No speaker playback was performed.
+- The 0.3.6 wheel built and installed with its declared dependencies in a fresh
+  Python 3.14 virtual environment outside the checkout. Both CLI help entry points
+  and `pip check` passed. Installed-package discovery and separate-process SQLite
+  restart recall passed. Piper synthesis from that environment also passed without
+  playback; optional wake-training code was not imported.
+- Live acceptance above is still pending; no stable release tag was created.
+
 ## Recorded validation — 2026-10-04 (v0.3.6 patch)
 
 - 567 unit tests passed; three integrations excluded. Ruff, whitespace checks,

@@ -39,11 +39,16 @@ class AmbientConversation:
         self.followup_seconds = followup_seconds
         self.followup_policy = followup_policy
         self.deadline = 0.0
+        # Keep a longer, context-gated window after the direct conversation window
+        # closes. This lets a clearly related delayed follow-up use recent turns
+        # without treating all nearby speech as addressed.
+        self.context_deadline = 0.0
         self.background: deque[tuple[float, str]] = deque(maxlen=6)
         self.interaction: deque[ChatMessage] = deque(maxlen=4)
 
     def reset(self) -> None:
         self.deadline = 0.0
+        self.context_deadline = 0.0
         self.background.clear()
         self.interaction.clear()
 
@@ -54,6 +59,7 @@ class AmbientConversation:
 
     def replied(self) -> None:
         self.deadline = time.monotonic() + self.followup_seconds
+        self.context_deadline = time.monotonic() + max(1800.0, self.followup_seconds)
 
     def is_explicit(self, text: str) -> bool:
         return is_direct_address(text, self.wake_phrase)
@@ -62,6 +68,7 @@ class AmbientConversation:
         self.background.append((time.monotonic(), text[:300]))
         if end_conversation:
             self.deadline = 0.0
+            self.context_deadline = 0.0
             self.interaction.clear()
 
     @staticmethod
@@ -107,16 +114,26 @@ class AmbientConversation:
         """Keep recent dialogue engaged; require an address outside its time window."""
         now = time.monotonic()
         began = started_at if started_at is not None and 0 <= started_at <= now else now
-        if began > self.deadline and not during_reply:
+        active_window = began <= self.deadline or (during_reply and bool(self.interaction))
+        contextual_window = (
+            (began <= self.context_deadline and bool(dialogue))
+            or bool(unfinished_request)
+        )
+        if not active_window:
             # A fresh direct address must not revive an old assistant turn before
-            # the new conversation has received its first reply.
+            # the new conversation has received its first reply. Persistent recent
+            # turns may still be used by the context-only classifier below.
             self.interaction.clear()
             self.deadline = 0.0
         if verified_wake:
             return SpeechDecision(True, explicit=True, reason="verified_wake")
         if self.is_explicit(text):
             return SpeechDecision(True, explicit=True, reason="direct_address")
-        clock_question = interpret_clock_address(text, self.wake_phrase)
+        clock_question = interpret_clock_address(
+            text,
+            self.wake_phrase,
+            explicitly_addressed=verified_wake or self.is_explicit(text),
+        )
         if clock_question:
             return SpeechDecision(
                 True, interpretation=clock_question, reason="clock_address",
@@ -128,6 +145,12 @@ class AmbientConversation:
         ):
             self._observe_background(text)
             return SpeechDecision(False, reason="addressed_to_someone_else")
+        if not active_window and not contextual_window:
+            if text.strip():
+                self._observe_background(text)
+            return SpeechDecision(
+                False, reason="outside_followup_window" if text.strip() else "no_transcript"
+            )
         if unfinished_request and re.match(
             r"^(?:and|also|actually|but|plus|instead|include|with|wait|no|i\s+mean(?:t)?)\b",
             text.strip(), re.I,
@@ -136,27 +159,35 @@ class AmbientConversation:
             # token to an accepted, still unfinished request. This inherits address
             # permission, not authorization to save an inferred personal fact.
             return SpeechDecision(True, reason="merged_continuation")
-        if not text.strip() or (began > self.deadline and not (during_reply and self.interaction)):
-            if text.strip():
-                self._observe_background(text)
-            return SpeechDecision(
-                False, reason="outside_followup_window" if text.strip() else "no_transcript"
-            )
+        if not text.strip():
+            return SpeechDecision(False, reason="no_transcript")
         if (
             any(message.role == "assistant" for message in self.interaction)
             and self._is_speech_feedback(text)
         ):
             return SpeechDecision(True, reason="speech_feedback")
         active_conversation = (
-            self.followup_policy == "conversation"
+            active_window
+            and self.followup_policy == "conversation"
             and any(message.role == "assistant" for message in self.interaction)
         )
+        interaction = list(self.interaction)
+        if any(message.role == "assistant" for message in interaction):
+            # A complete in-memory exchange is more current than any caller's
+            # broader history; do not mix unrelated stale turns into the gate.
+            recent_dialogue = interaction[-4:]
+        else:
+            # While the first reply is interrupted, only its user turn may have
+            # been recorded in memory. Add it to persisted recent context so the
+            # partial utterance can still be judged as a continuation.
+            recent_dialogue = list(dialogue[-4:])
+            for message in interaction:
+                if message not in recent_dialogue:
+                    recent_dialogue.append(message)
         payload = {
             "active_conversation": active_conversation,
             "unfinished_addressed_request": unfinished_request or [],
-            "recent_dialogue": [
-                message.to_dict() for message in (list(self.interaction) or dialogue)[-4:]
-            ],
+            "recent_dialogue": [message.to_dict() for message in recent_dialogue[-4:]],
             "background_context": self.context_note(),
             "transcript": text[:1000],
         }

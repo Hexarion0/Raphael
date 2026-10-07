@@ -611,10 +611,10 @@ Start with SQLite. Do not introduce a vector database until it is actually neede
 ### 2.3 Long-Term Memory
 
 #### 2.3.1
-- [x] Store explicit facts (`remember ...` plus recognized names, favorites, and project dates)
+- [x] Store explicit `remember ...` commands and confirmed names, favorites, and project dates
 
 #### 2.3.2
-- [ ] Allow RAPHAEL to propose memories rather than save them silently
+- [x] Propose conversational facts and corrections; save only after confirmation
 
 Example:
 
@@ -625,6 +625,10 @@ RAPHAEL proposes:
 ```text
 favorite game = CS2
 ```
+
+Pending proposals expire after 60 seconds, restart, cancellation, or a topic change.
+In ambient mode, address RAPHAEL directly to confirm. Explicit `remember ...`
+commands save immediately; rejecting a proposal leaves existing facts unchanged.
 
 #### 2.3.3
 - [x] Retrieve relevant memories (ranked words and aliases; embedding recall remains future work)
@@ -671,7 +675,7 @@ restart. The checklist below remains the live voice acceptance test.
 
 ## v0.3 — Memory Complete
 
-Current development version: **0.3.0**. Persistent SQLite facts, corrections,
+Current development version: **0.3.6**. Persistent SQLite facts, corrections,
 deletion, restart recall, and background summaries are implemented. This version
 also connects streamed provider replies to sentence playback, preserves interrupted
 requests and playback context, and budgets CUDA STT quality retries during voice
@@ -679,8 +683,9 @@ training. Runtime, package, and startup banner versions now agree.
 
 The live restart checklist above and microphone acceptance in
 [`release-checks.md`](release-checks.md) remain pending. Memory proposals in 2.3.2
-also remain planned. The version bump does not mark these checks complete or
-create a stable release tag. Skills/actions are the next development milestone.
+are implemented with acceptance/rejection and expiry. The version bump does not
+mark live checks complete or create a stable release tag. The first skills/actions
+are now implemented; v0.4 remains in progress.
 
 ```bash
 git tag v0.3
@@ -706,17 +711,26 @@ actions/
 
 ### 3.1 Skill Loader
 
-- [ ] Automatically discover skills — adding `actions/weather.py` shouldn't require touching the core
+- [x] Discover trusted installed action modules exporting `ACTION` without core edits
+
+The action contract, validation, cooperative deadline, cancellation, and optional
+confirmation flow are documented in [`actions.md`](actions.md). These are local
+commands; model-selected function calling is still pending in 3.4.
 
 ---
 
 ### 3.2 Core Skills
 
 #### 3.2.1 Open Applications
-- [ ] Implement "open app" skill (e.g. "Open Discord")
+- [x] Implement Linux application launching (Discord/Vesktop, Firefox, Chromium, Steam, VS Code)
+
+Uses an executable allowlist with no shell or spoken arguments. A launch request
+is acknowledged; window readiness still requires live desktop acceptance.
 
 #### 3.2.2 System Information
-- [ ] Implement system info skill (e.g. "How much RAM am I using?")
+- [x] Answer RAM usage, GPU temperature, and logical CPU core count locally
+
+Reuses the existing telemetry backend; unavailable metrics are reported honestly.
 
 #### 3.2.3 Web Search
 - [ ] Implement web search skill (e.g. "Search for the latest NVIDIA driver")
@@ -757,7 +771,11 @@ Example:
 
 ### 3.5 Safety
 
-- [ ] Require confirmation for potentially destructive actions
+- [x] Add action confirmation support, requiring explicit authorization and a fresh yes
+
+No destructive action ships yet. Actions declare whether they mutate state or
+require confirmation. Only trusted installed modules are discovered. Ambient
+follow-ups cannot launch applications or confirm side effects.
 
 Example:
 
@@ -774,13 +792,17 @@ Do you want me to continue?"
 
 ### 3.6 Refine
 
-- [ ] Handle ambiguous requests
-- [ ] Handle invalid arguments
-- [ ] Handle unavailable applications
-- [ ] Handle skill failures
-- [ ] Handle timeouts
-- [ ] Handle permissions
-- [ ] Handle destructive operations
+- [x] Handle ambiguous requests
+- [x] Handle invalid arguments
+- [x] Handle unavailable applications
+- [x] Handle skill failures
+- [x] Handle timeouts
+- [x] Handle permissions
+- [ ] Validate an actual destructive action end-to-end before shipping one
+
+Automated checks cover local dispatch and failure handling. Deadlines are
+cooperative: handlers must bound blocking I/O and check cancellation before side
+effects. Real microphone, desktop launch, and speaker acceptance remain pending.
 
 ---
 

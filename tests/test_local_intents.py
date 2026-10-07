@@ -15,6 +15,12 @@ def test_local_time(text):
     assert answer_clock_query(text, datetime(2026, 10, 3, 3, 16)) == "It's 3:16 AM."
 
 
+def test_narrow_stt_clock_recovery_maps_to_a_deterministic_local_answer():
+    assert answer_clock_query("What's the time right now?", datetime(2026, 10, 3, 3, 16)) == (
+        "It's 3:16 AM."
+    )
+
+
 def test_local_date():
     assert (
         answer_clock_query(

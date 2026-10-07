@@ -2,7 +2,7 @@
 
 import logging
 
-from raphael.logging import SecretMaskingFilter, get_logger, setup_logging
+from raphael.logging import ConciseLogFilter, SecretMaskingFilter, get_logger, setup_logging
 
 
 def test_secret_masking_filter():
@@ -45,3 +45,22 @@ def test_setup_logging():
 
     sub_logger = get_logger("providers.nim")
     assert sub_logger.name == "raphael.providers.nim"
+
+
+def test_concise_log_filter_keeps_conversation_and_problems_only():
+    concise = ConciseLogFilter()
+
+    def record(level, message):
+        return logging.LogRecord(
+            name="raphael.audio.listener", level=level, pathname="test.py", lineno=1,
+            msg=message, args=(), exc_info=None,
+        )
+
+    assert concise.filter(record(logging.INFO, '🗣️ You: "hello"'))
+    assert concise.filter(record(logging.INFO, '🤖 RAPHAEL: "hi"'))
+    assert concise.filter(record(logging.INFO, "Microphone active — ambient listening"))
+    assert concise.filter(record(logging.INFO, "Chatterbox Turbo ready (pid=1)"))
+    assert not concise.filter(record(logging.INFO, "Chatterbox Turbo ready (pid=1)"))
+    assert not concise.filter(record(logging.INFO, "Transcribing 4.8s of audio"))
+    assert not concise.filter(record(logging.DEBUG, "provider payload details"))
+    assert concise.filter(record(logging.WARNING, "provider request failed"))

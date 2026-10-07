@@ -51,18 +51,9 @@ def test_turbo_events_are_explicit_and_limited_to_the_pinned_native_set():
     )
 
 
-def test_tts_engine_detection():
-    # mommy voice auto-selects fish_speech
-    tts_mommy = TextToSpeech(voice_name="mommy", enabled=False, engine="auto")
-    assert tts_mommy.engine == "fish_speech"
-
-    # edge_tts voice auto-detects
-    tts_edge = TextToSpeech(voice_name="en-US-AvaNeural", enabled=False, engine="auto")
-    assert tts_edge.engine == "edge_tts"
-
-    # piper voice auto-detects
-    tts_piper = TextToSpeech(voice_name="en_GB-alan-medium", enabled=False, engine="auto")
-    assert tts_piper.engine == "piper"
+def test_tts_engine_defaults_to_piper():
+    tts = TextToSpeech(voice_name="en_US-amy-medium", enabled=False, engine="auto")
+    assert tts.engine == "piper"
 
 
 @pytest.mark.integration
@@ -78,25 +69,6 @@ def test_piper_initialization_and_synthesis():
     assert audio.ndim == 1
     assert audio.size > 0
     assert sample_rate == 22050
-
-
-def test_fish_speech_fallback_when_offline():
-    # Fish speech with invalid port should gracefully fall back to Edge-TTS or Piper
-    tts = TextToSpeech(
-        voice_name="mommy",
-        engine="fish_speech",
-        fish_speech_url="http://127.0.0.1:9999/v1/tts",
-        enabled=True,
-    )
-    # Mock fallback to avoid external network dependencies during unit tests
-    dummy_audio = (np.zeros(16000, dtype=np.float32), 16000)
-    with (
-        patch("raphael.audio.tts.requests.post", side_effect=ConnectionError("offline")),
-        patch.object(tts, "_fallback_synthesize", return_value=dummy_audio) as mock_fb,
-    ):
-        result = tts.synthesize("Testing fallback mechanism.")
-        assert result is not None
-        mock_fb.assert_called_once()
 
 
 def test_tts_disabled():
@@ -188,52 +160,32 @@ def test_omitted_engine_uses_selected_piper_voice(monkeypatch):
     expected = np.ones(100, dtype=np.float32), 22050
     with (
         patch.object(tts, "_synthesize_piper", return_value=expected) as local,
-        patch.object(tts, "_synthesize_fish_speech") as fish,
-        patch.object(tts, "_synthesize_edge_tts") as edge,
     ):
         assert tts.synthesize("I'm here.") is expected
     local.assert_called_once()
-    fish.assert_not_called()
-    edge.assert_not_called()
-
-
-def test_local_fallback_is_used_and_cached_before_network(tmp_path, monkeypatch):
-    from unittest.mock import MagicMock
-
-    (tmp_path / "en_GB-alan-medium.onnx").write_bytes(b"model")
-    (tmp_path / "en_GB-alan-medium.onnx.json").write_text("{}")
-    tts = TextToSpeech(voice_name="mommy", engine="fish_speech", models_dir=tmp_path, enabled=False)
-    tts.enabled = True
-    voice = MagicMock()
-    audio = np.ones(100, dtype=np.float32), 22050
-    with (
-        patch("raphael.audio.tts.PiperVoice.load", return_value=voice) as load,
-        patch.object(tts, "_synthesize_piper", return_value=audio) as local,
-        patch.object(tts, "_synthesize_edge_tts") as edge,
-    ):
-        assert tts._fallback_synthesize("first") is audio
-        assert tts._fallback_synthesize("second") is audio
-    assert load.call_count == 1
-    assert local.call_count == 2
-    edge.assert_not_called()
-    assert tts.enabled
 
 
 @pytest.mark.parametrize(
     "voice, engine, expected",
     [
         ("en_US-amy-medium", "auto", "piper"),
-        ("custom_voice", "auto", "piper"),
-        ("en-US-AvaNeural", "auto", "edge_tts"),
-        ("mommy", "auto", "fish_speech"),
-        ("en_US-amy-medium", "fish_speech", "fish_speech"),
-        ("mommy", "piper", "piper"),
+        ("en_GB-alan-medium", "auto", "piper"),
+        ("raphael", "chatterbox_turbo", "chatterbox_turbo"),
+        ("raphael", "chatterbox", "chatterbox_turbo"),
+        ("raphael", "piper", "piper"),
     ],
 )
 def test_engine_resolution_respects_explicit_selection(voice, engine, expected):
     from raphael.audio.tts import resolve_tts_engine
 
     assert resolve_tts_engine(voice, engine) == expected
+
+
+def test_removed_engines_are_rejected():
+    from raphael.audio.tts import resolve_tts_engine
+
+    with pytest.raises(ValueError, match="Unknown TTS engine"):
+        resolve_tts_engine("raphael", "fish_speech")
 
 
 def test_chatterbox_backend_starts_lazily_and_falls_back_offline(monkeypatch):
