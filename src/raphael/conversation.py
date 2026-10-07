@@ -67,7 +67,9 @@ def is_direct_address(text: str, wake_phrase: str = "hey raphael") -> bool:
     )
 
 
-def interpret_clock_address(text: str, wake_phrase: str = "hey raphael") -> str | None:
+def interpret_clock_address(
+    text: str, wake_phrase: str = "hey raphael", *, explicitly_addressed: bool = False
+) -> str | None:
     """Interpret a bounded clock question ending in the assistant's known name.
 
     A missing 'it' before the trailing name is a possible STT error, not an
@@ -77,6 +79,12 @@ def interpret_clock_address(text: str, wake_phrase: str = "hey raphael") -> str 
     if not re.search(r"\b(?:raphael|rafael|raphel|rafeal)\b", wake_phrase, re.I):
         return None
     candidate = _ADDRESS_FILLERS.sub("", text.strip().replace("’", "'"), count=1)
+    if explicitly_addressed:
+        candidate = strip_wake_phrase(candidate, wake_phrase).strip(" .!?;:").casefold()
+        if re.fullmatch(r"what(?:'s| is) the name right now", candidate, re.I):
+            # A common small.en substitution in an explicit time query. Keep this
+            # correction narrow and require the caller's independent address signal.
+            return "What's the time right now?"
     match = re.fullmatch(
         r"(?P<question>what time is(?: it(?: (?:now|right now))?)?|"
         r"what(?:'s| is) (?:the )?(?:current )?time(?: (?:now|right now))?|"

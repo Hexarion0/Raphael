@@ -4,14 +4,9 @@ import argparse
 import re
 import sys
 import time
-from pathlib import Path
 
 from raphael import __version__
 from raphael.conversation import interpret_clock_address, is_farewell, strip_wake_phrase
-
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-RAW_VOICE_DIR = PROJECT_ROOT / "training" / "raw"
-PREPARED_DATASET_DIR = PROJECT_ROOT / "training" / "dataset"
 
 
 def main() -> int:
@@ -29,10 +24,14 @@ def main() -> int:
             "setup",
             "record-samples",
             "train-wake",
-            "prepare-voice",
-            "train-voice",
         ],
         help="Command to run",
+    )
+    parser.add_argument(
+        "mode",
+        nargs="?",
+        choices=["dev"],
+        help="Use verbose debug logging (for example: raphael start dev)",
     )
     parser.add_argument(
         "--listen",
@@ -69,25 +68,9 @@ def main() -> int:
         default="Hey Raphael",
         help="Target wake phrase to train (default: 'Hey Raphael')",
     )
-    parser.add_argument(
-        "--input",
-        type=str,
-        default=str(RAW_VOICE_DIR),
-        help="Raw licensed video/audio (default: training/raw)",
-    )
-    parser.add_argument(
-        "--output",
-        type=str,
-        default=str(PREPARED_DATASET_DIR),
-        help="Prepared Piper dataset directory (default: training/dataset)",
-    )
-    parser.add_argument(
-        "--voice-name",
-        type=str,
-        default="custom_voice",
-        help="Installed Piper voice name (models/tts/<name>.onnx)",
-    )
     args = parser.parse_args()
+    if args.mode == "dev" and args.command not in {"start", "listen"}:
+        parser.error("the 'dev' mode can only be used with 'start' or 'listen'")
 
     # If user ran `python -m raphael setup`
     if args.command == "setup":
@@ -114,67 +97,35 @@ def main() -> int:
             return 1
         return 0
 
-    if args.command == "prepare-voice":
-        from raphael.audio.voice_dataset import prepare_voice_dataset
-
-        raw_dir = Path(args.input)
-        if not raw_dir.exists():
-            print(f"Drop licensed video/audio in {raw_dir} then re-run prepare-voice.")
-            return 2
-        try:
-            report = prepare_voice_dataset(
-                input_path=raw_dir,
-                output_dir=args.output,
-            )
-        except (OSError, RuntimeError, ValueError) as err:
-            print(f"Voice dataset preparation failed: {err}")
-            return 1
-        print(
-            f"Prepared {report.clip_count} clips from {report.source_count} sources "
-            f"({report.skipped_count} skipped) at {report.output_dir}"
-        )
-        print(
-            "Train with: python -m raphael train-voice --output "
-            f"{report.output_dir} --voice-name {args.voice_name}"
-        )
-        return 0
-
-    if args.command == "train-voice":
-        from raphael.audio.piper_train import PiperTrainError, build_piper_train_plan
-
-        try:
-            plan = build_piper_train_plan(
-                dataset_dir=Path(args.output),
-                voice_name=args.voice_name,
-            )
-        except PiperTrainError as err:
-            print(f"Voice training setup failed: {err}")
-            return 1
-        print("Piper training uses a separate GPU venv. RAPHAEL runtime only loads the ONNX.")
-        for step in plan.steps:
-            print(f"  • {step}")
-        print(f"Then set TTS_ENGINE=piper and TTS_VOICE={plan.voice_name}")
-        return 0
-
+    from raphael.actions import ActionRegistry
     from raphael.config import get_settings
     from raphael.latency import active_trace, latency_phase, mark
     from raphael.logging import setup_logging
     from raphael.memory import ConversationManager, MemoryStore
     from raphael.memory.context import recall_context_memories
     from raphael.memory.service import MemoryService
-    from raphael.persona import PERSONA_CONTEXT_VERSION
+    from raphael.persona import (
+        PERSONA_CONTEXT_VERSION,
+        parse_persona_request,
+        update_persona_file,
+    )
     from raphael.platform import generate_system_prompt, get_audio_backend
     from raphael.providers import get_model_router
     from raphael.providers.base import ChatMessage
     from raphael.providers.intents import answer_clock_query
 
     settings = get_settings()
-    logger = setup_logging(settings.app.log_level)
+    dev_mode = args.mode == "dev"
+    logger = setup_logging("DEBUG" if dev_mode else "INFO", concise=not dev_mode)
 
     logger.info("==========================================")
     logger.info("   RAPHAEL - Desktop AI Assistant v%s  ", __version__)
     logger.info("==========================================")
-    logger.info("Environment: %s | Log Level: %s", settings.app.env, settings.app.log_level)
+    logger.info(
+        "Environment: %s | Log Level: %s",
+        settings.app.env,
+        "DEBUG" if dev_mode else "INFO",
+    )
 
     # Initialize and report audio backend status
     audio_backend = get_audio_backend()
@@ -282,6 +233,7 @@ def main() -> int:
         )
         logger.info("Conversation context: %s", conv_manager.session_id)
         memory_service = MemoryService(memory_store)
+        actions = ActionRegistry.discover()
 
         def build_system_prompt(query: str = "") -> str:
             recalled_memories = recall_context_memories(memory_store, query)
@@ -307,6 +259,7 @@ def main() -> int:
             re.IGNORECASE,
         )
         _in_followup = [False]  # mutable flag shared across calls
+        persona_change_pending = [False]
 
         def on_wake(info: dict):
             logger.info("🎯 Wake detected! Details: %s", info)
@@ -445,10 +398,14 @@ def main() -> int:
             else:
                 mark("speech_gate_finished", reason="disabled")
             if wake_info.get("stt_needs_repeat"):
+                memory_service.cancel_proposal()
+                actions.cancel_pending()
                 logger.info("Speech was unclear; asking for a repeat instead of sending a guess.")
                 say("I didn't catch that clearly. Could you say it again?")
                 return True
             if not user_text:
+                memory_service.cancel_proposal()
+                actions.cancel_pending()
                 logger.info("🗣️ (No speech detected after wake — returning to standby.)")
                 _in_followup[0] = False
                 return False
@@ -468,6 +425,8 @@ def main() -> int:
                 cleaned_query, re.I,
             )
             if mode_off or mode_on:
+                memory_service.cancel_proposal()
+                actions.cancel_pending()
                 mark("local_intent_resolved", intent="listening_mode")
                 pending_speech.clear()
                 unfinished_request[0] = {}
@@ -499,6 +458,8 @@ def main() -> int:
 
             # Check if user requested immediate stop / cancel
             if _stop_re.search(cleaned_query):
+                memory_service.cancel_proposal()
+                actions.cancel_pending()
                 mark("local_intent_resolved", intent="stop")
                 pending_speech.clear()
                 unfinished_request[0] = {}
@@ -513,8 +474,70 @@ def main() -> int:
             allow_memory = (
                 not restored_fragments and reliable and (decision is None or decision.explicit)
             )
+            persona_change_allowed = reliable and (
+                decision is None or decision.explicit or persona_change_pending[0]
+            )
+            persona_text = cleaned_query
+            if persona_change_pending[0] and (earlier_fragments or restored_fragments):
+                fragments = restored_fragments or earlier_fragments
+                ignored_acknowledgements = {"ok", "okay", "yes", "yeah", "right", "thanks"}
+                fragments = [
+                    part for part in fragments + [cleaned_query]
+                    if len(part.split()) >= 3
+                    and part.casefold().strip(" .!?") not in ignored_acknowledgements
+                ]
+                if fragments:
+                    persona_text = " ".join(fragments[-3:])
+            persona_request = (
+                parse_persona_request(persona_text, pending=persona_change_pending[0])
+                if persona_change_allowed else None
+            )
+            if persona_request is not None:
+                memory_service.cancel_proposal()
+                actions.cancel_pending()
+                action, preference = persona_request
+                if action == "ask":
+                    persona_change_pending[0] = True
+                    acknowledgement = "Yes. What would you like me to change about my style?"
+                    conv_manager.add_turn(role="user", content=cleaned_query)
+                    conv_manager.add_turn(
+                        role="assistant", content=acknowledgement,
+                        provider="local", model="persona",
+                    )
+                    log_reply('🤖 RAPHAEL: "%s" [local/persona]', acknowledgement)
+                    say(acknowledgement)
+                    return True
+                if update_persona_file(
+                    settings.raphael_persona_file, action, preference,
+                ):
+                    persona_change_pending[0] = False
+                    acknowledgement = (
+                        "I've reset my custom style preferences."
+                        if action == "reset"
+                        else "Got it. I'll use that style from now on."
+                    )
+                    conv_manager.add_turn(role="user", content=cleaned_query)
+                    conv_manager.add_turn(
+                        role="assistant", content=acknowledgement,
+                        provider="local", model="persona",
+                    )
+                    mark("local_intent_resolved", intent="persona")
+                    log_reply('🤖 RAPHAEL: "%s" [local/persona]', acknowledgement)
+                    say(acknowledgement)
+                else:
+                    say("I couldn't update my persona file, so my style hasn't changed.")
+                return True
+            if not allow_memory:
+                memory_service.cancel_proposal()
             memory_reply = memory_service.handle(cleaned_query) if allow_memory else None
             if memory_reply is not None:
+                if ambient_enabled[0] and memory_reply.startswith("Should I remember"):
+                    wake = settings.audio.wake_word
+                    memory_reply = memory_reply.replace(
+                        "Say yes to save it or no to skip it.",
+                        f'Say "{wake}, yes" to save it or "{wake}, no" to skip it.',
+                    )
+                actions.cancel_pending()
                 mark("local_intent_resolved", intent="memory")
                 conv_manager.add_turn(role="user", content=cleaned_query)
                 conv_manager.add_turn(
@@ -522,6 +545,28 @@ def main() -> int:
                 )
                 log_reply('🤖 RAPHAEL: "%s" [local/memory]', memory_reply)
                 say(memory_reply)
+                _in_followup[0] = True
+                return True
+
+            if earlier_fragments or restored_fragments:
+                actions.cancel_pending()
+                if reliable and not restored_fragments:
+                    # Retain a clear app-name correction, without executing an interrupted task.
+                    actions.observe_request(cleaned_query)
+            action_reply = actions.handle(
+                cleaned_query, authorized=allow_memory, cancel_event=cancel_event,
+            ) if current() and not earlier_fragments and not restored_fragments else None
+            if not reliable:
+                actions.cancel_pending()
+            if action_reply is not None:
+                memory_service.cancel_proposal()
+                mark("local_intent_resolved", intent="action")
+                conv_manager.add_turn(role="user", content=cleaned_query)
+                conv_manager.add_turn(
+                    role="assistant", content=action_reply, provider="local", model="action",
+                )
+                log_reply('🤖 RAPHAEL: "%s" [local/action]', action_reply)
+                say(action_reply)
                 _in_followup[0] = True
                 return True
 
@@ -552,7 +597,11 @@ def main() -> int:
             if not restored_fragments:
                 conv_manager.add_turn(role="user", content=cleaned_query)
             clock_query = (
-                interpret_clock_address(cleaned_query, settings.audio.wake_word) or cleaned_query
+                interpret_clock_address(
+                    user_text,
+                    settings.audio.wake_word,
+                    explicitly_addressed=bool(decision and decision.explicit),
+                ) or cleaned_query
             )
             local_reply = answer_clock_query(clock_query)
             if local_reply is not None and not earlier_fragments and not added_speech:
@@ -604,10 +653,18 @@ def main() -> int:
                     + json.dumps(decision.interpretation, ensure_ascii=False)
                 )
             system_prompt += (
-                "\nThis input came from speech recognition. Interpret small wording mistakes "
-                "using recent dialogue when the intended meaning is clear. Preserve names, "
-                "dates, numbers, negation, and commands; ask briefly if those are ambiguous. "
-                "The original transcript stays the record. Never claim a guess was saved."
+                "\nThe user's message was transcribed from speech and may contain recognition "
+                "errors, including substituted or missing words and incorrect punctuation. "
+                "Interpret it together with the recent conversation and the likely spoken "
+                "phrasing. If the transcript is contradictory, nonsensical, or does not fit "
+                "the conversation, do not pretend it is clear: consider plausible speech "
+                "recognition alternatives. When one low-risk meaning is strongly supported "
+                "by context, respond to that meaning naturally. When more than one meaning "
+                "is plausible, or a guess could change a name, number, date, negation, command, "
+                "or consequential action, ask one brief, specific question such as 'Did you "
+                "mean X?' before proceeding. Never invent details to make a transcript fit, "
+                "and do not treat a guessed correction as a confirmed fact or claim it was "
+                "saved. The recognized transcript remains the record."
             )
             context_messages = conv_manager.get_active_messages(system_prompt=system_prompt)
             mark("context_build_finished", messages=len(context_messages),
@@ -720,16 +777,34 @@ def main() -> int:
         def observe_transcript(text: str, info: dict) -> None:
             # A second utterance cancels the old reply, not the knowledge that the
             # user addressed RAPHAEL. Keep this solely in temporary dialogue context.
-            if not info.get("superseded") or info.get("stt_needs_repeat") or not text.strip():
+            if not info.get("superseded"):
                 return
+            if info.get("stt_needs_repeat"):
+                logger.info(
+                    "Interrupted speech was unclear to STT and wasn't merged; "
+                    "please repeat that part."
+                )
+                return
+            if not text.strip():
+                return
+            logger.info('🗣️ Heard during RAPHAEL reply: "%s"', text)
             if ambient_enabled[0]:
                 decision = ambient_context.decide(
-                    text, router, [], started_at=info.get("speech_started_at"),
+                    text,
+                    router,
+                    [
+                        ChatMessage(turn.role, turn.content)
+                        for turn in conv_manager.get_recent_turns(limit=4)
+                    ],
+                    started_at=info.get("speech_started_at"),
                     verified_wake=bool(info.get("wake_verified")),
                     during_reply=bool(info.get("during_reply")),
                     unfinished_request=linked_fragments(info),
                 )
                 if not decision.addressed:
+                    logger.info(
+                        "Interrupted speech wasn't merged (%s).", decision.reason
+                    )
                     return
                 ambient_context.record_addressed("user", text)
             fragment = strip_wake_phrase(text, settings.audio.wake_word)
@@ -801,12 +876,13 @@ def main() -> int:
             loop.start()
             if ambient_enabled[0]:
                 logger.info(
-                    "Ambient listening active; follow-up policy=%s, window=%.0fs.",
-                    settings.audio.ambient_followup_policy, settings.audio.ambient_followup_seconds,
+                    "Microphone active — ambient listening; address RAPHAEL for a reply "
+                    "(follow-up window %.0fs).",
+                    settings.audio.ambient_followup_seconds,
                 )
             else:
                 logger.info(
-                    "Awaiting wake word... Say '%s' followed by your question.",
+                    "Microphone active — waiting for wake phrase '%s'.",
                     settings.audio.wake_word.title(),
                 )
             while True:

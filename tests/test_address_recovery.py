@@ -45,6 +45,12 @@ def test_clock_address_does_not_assume_raphael_for_custom_wake_phrase():
     assert interpret_clock_address("What time is Raphael?", "hey jarvis") is None
 
 
+def test_explicit_wake_allows_narrow_name_for_time_stt_recovery():
+    raw = "Hey Raphael, what's the name right now?"
+    assert interpret_clock_address(raw, explicitly_addressed=True) == "What's the time right now?"
+    assert interpret_clock_address("What's the name right now?") is None
+
+
 def test_malformed_clock_address_opens_dialogue_without_explicit_authorization():
     ambient = AmbientConversation()
     router = MagicMock()

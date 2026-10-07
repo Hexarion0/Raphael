@@ -1,4 +1,4 @@
-"""Inventory and fetch one official cloning candidate, excluding redundant artifacts."""
+"""Fetch the pinned production Chatterbox Turbo model files."""
 
 from __future__ import annotations
 
@@ -8,10 +8,6 @@ import json
 from pathlib import Path
 
 CANDIDATES = {
-    "chatterbox500": (
-        "ResembleAI/chatterbox",
-        ["t3_cfg.safetensors", "s3gen.safetensors", "ve.safetensors", "tokenizer.json"],
-    ),
     "chatterbox-turbo": (
         "ResembleAI/chatterbox-turbo",
         [
@@ -20,40 +16,6 @@ CANDIDATES = {
             "ve.safetensors",
             "*.json",
             "*.txt",
-        ],
-    ),
-    "chatterbox-nano": (
-        "ResembleAI/chatterbox-nano",
-        [
-            "t3_nano_v1.safetensors",
-            "s3gen_meanflow.safetensors",
-            "ve.safetensors",
-            "*.json",
-            "*.txt",
-        ],
-    ),
-    "cosyvoice3": (
-        "FunAudioLLM/Fun-CosyVoice3-0.5B-2512",
-        [
-            "llm.pt",
-            "flow.pt",
-            "hift.pt",
-            "campplus.onnx",
-            "speech_tokenizer_v3.onnx",
-            "cosyvoice3.yaml",
-            "*.json",
-            "CosyVoice-BlankEN/*.json",
-            "CosyVoice-BlankEN/*.txt",
-        ],
-    ),
-    "qwen06": (
-        "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
-        [
-            "*.json",
-            "*.txt",
-            "model.safetensors",
-            "speech_tokenizer/*.json",
-            "speech_tokenizer/model.safetensors",
         ],
     ),
 }

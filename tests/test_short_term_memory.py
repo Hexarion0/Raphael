@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from raphael.memory import ConversationManager, MemoryStore
-from raphael.providers.base import LLMResponse
+from raphael.providers.base import LLMResponse, LLMStreamChunk
 
 
 @pytest.fixture
@@ -336,17 +336,17 @@ def test_real_router_uses_summary_purpose_even_for_code_transcript(temp_store):
         provider = MagicMock()
         provider.is_configured.return_value = name == "nim"
         setattr(providers, name, provider)
-    providers.send_with_fallback.return_value = LLMResponse(
-        content="Discussed Python code.",
+    providers.stream_with_fallback.return_value = [LLMStreamChunk(
+        delta="Discussed Python code.",
         model="test",
         provider="test",
-    )
+    )]
     router = ModelRouter(providers)
     manager = ConversationManager(store=temp_store, max_turns=2, auto_summarize_threshold=2)
     for _ in range(4):
         manager.add_turn("user", "Refactor this Python function and debug the SQL error")
     assert manager.summarize_older_turns(router) == "Discussed Python code."
-    arguments = providers.send_with_fallback.call_args.kwargs
+    arguments = providers.stream_with_fallback.call_args.kwargs
     assert arguments["model"] == get_settings().providers.nim_model
     assert arguments["max_tokens"] == 150
 

@@ -33,9 +33,9 @@ def test_setup_preserves_custom_settings_and_reports_playback_failure(
     original = (
         "# Keep my settings\n"
         "stt_model=small.en\nSTT_BEAM_SIZE=5\nMEMORY_MAX_SHORT_TERM_TURNS=20\n"
-        'FISH_REF_TEXT="A quoted phrase # with a comment character"\n'
-        "FISH_SPEECH_URL=http://localhost:9000/tts\n"
-        "TTS_VOICE=mommy\nTTS_ENGINE=fish_speech\n"
+        ''
+        ""
+        "TTS_VOICE=en_US-amy-medium\nTTS_ENGINE=piper\n"
         'AUDIO_INPUT_DEVICE=3\nAUDIO_OUTPUT_DEVICE="USB Speaker"\n'
         'CUSTOM_VALUE="literal ${NOT_AN_ENV_VAR}"\n'
     )
@@ -56,8 +56,8 @@ def test_setup_preserves_custom_settings_and_reports_playback_failure(
     assert "Audio test failed" in output
     assert "Audio test successful" not in output
     settings = Settings(_env_file=tmp_path / ".env")
-    assert settings.audio.tts_voice == "mommy"
-    assert settings.audio.tts_engine == "fish_speech"
+    assert settings.audio.tts_voice == "en_US-amy-medium"
+    assert settings.audio.tts_engine == "piper"
     assert settings.stt_beam_size == 5
     assert settings.memory.max_short_term_turns == 20
     assert settings.audio.input_device == 3
@@ -67,7 +67,7 @@ def test_setup_preserves_custom_settings_and_reports_playback_failure(
 def test_setup_can_reset_devices_and_change_voice(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".env").write_text(
-        "TTS_VOICE=mommy\nTTS_ENGINE=fish_speech\nAUDIO_INPUT_DEVICE=3\n"
+        "TTS_VOICE=en_US-amy-medium\nTTS_ENGINE=piper\nAUDIO_INPUT_DEVICE=3\n"
     )
     answers = iter(["", "", "", "4", "default", "USB Speaker"])
     monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))

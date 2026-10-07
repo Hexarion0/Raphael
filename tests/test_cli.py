@@ -49,10 +49,11 @@ def test_env_listening_defaults_and_cli_overrides(tmp_path, monkeypatch, argumen
         ("Hey Raphael.", {}, "Hey! What's on your mind?"),
         ("", {"stt_needs_repeat": True}, "I didn't catch that clearly. Could you say it again?"),
         ("So what's the time right now?", {}, "It's 3:16 AM."),
-        ("My favorite game is CS2.", {}, "I've saved that. Your favorite game is CS2."),
+        ("My favorite game is CS2.", {},
+         "Should I remember this? Your favorite game is CS2. Say yes to save it or no to skip it."),
     ],
 )
-@pytest.mark.parametrize("launch_args", [["--listen"], ["start"]])
+@pytest.mark.parametrize("launch_args", [["--listen"], ["start"], ["start", "dev"]])
 def test_listen_wake_or_uncertain_speech_does_not_call_provider(
     tmp_path, monkeypatch, text, wake_info, expected_reply, launch_args
 ):
@@ -194,20 +195,6 @@ def test_listen_archives_legacy_style_but_keeps_saved_facts(tmp_path, monkeypatc
         assert restored.get_session_summary("desktop_session") is not None
     finally:
         restored.close()
-
-
-def test_train_voice_bad_dataset_reports_error_without_audio(tmp_path):
-    result = subprocess.run(
-        [sys.executable, "-m", "raphael", "train-voice", "--output", str(tmp_path)],
-        cwd=tmp_path,
-        env={**os.environ, "PYTHONPATH": SOURCE},
-        capture_output=True,
-        text=True,
-        timeout=10,
-    )
-    assert result.returncode == 1
-    assert "metadata.csv" in result.stdout
-    assert "Traceback" not in result.stderr
 
 
 def test_training_imports_are_optional_and_missing_extras_are_actionable(tmp_path):

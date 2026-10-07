@@ -18,10 +18,11 @@ RAPHAEL is a personal desk assistant that listens for a wake word, talks back in
 - 🧠 Multi-provider AI backend (NVIDIA NIM, OpenRouter, Groq, Ollama) with a fast/complex-task router
 - 🔊 Text-to-speech with its own voice
 - Completed sentences play while the AI is still generating; interruptions cancel queued speech
-- 💾 Persistent memory (short-term + long-term)
+- 💾 Persistent memory with confirmation before saving conversational facts
+- Local RAM/GPU/CPU answers and allowlisted Linux application launching
 
 **Planned extensions**
-- 🖐️ Pluggable skills/actions (open apps, reminders, web search, system info)
+- 🖐️ More actions: reminders, web search, and model-selected function calls
 - 🖥️ Web dashboard for live status, conversation history, and routing decisions
 - 💬 Messaging integration — Telegram, Discord (WhatsApp planned as a stretch goal)
 - 🎭 Mood/tone detection from voice, not just words
@@ -37,19 +38,20 @@ See the [full roadmap](docs/roadmap.md) for the complete, step-by-step build pla
 | Layer | Tools |
 |---|---|
 | Core | Python |
-| Server | FastAPI + WebSocket |
-| Dashboard | HTML/JS (React/TS planned later) |
+| Server (planned) | FastAPI + WebSocket |
+| Dashboard (planned) | HTML/JS (React/TS later) |
 | Speech-to-text | faster-whisper |
-| Text-to-speech | Piper |
-| Wake word | openWakeWord / Porcupine |
+| Text-to-speech | Chatterbox Turbo (example configuration), Piper fallback |
+| Wake word | Whisper keyword spotting / openWakeWord |
 | AI providers | NVIDIA NIM, OpenRouter, Groq, Ollama |
-| Messaging | Telegram Bot API, Discord API |
+| Messaging (planned) | Telegram Bot API, Discord API |
 
 ## Project Structure
 
 ```text
 src/raphael/
-├── audio/          → wake word, recording, STT, TTS, voice preparation
+├── actions/        → trusted local commands, validation, and execution
+├── audio/          → wake word, recording, STT, TTS, wake training
 ├── providers/      → AI clients, routing, and fallback
 ├── memory/         → SQLite conversation and memory storage
 ├── platform/       → audio devices and system telemetry
@@ -57,7 +59,7 @@ src/raphael/
 ├── persona.py      → assistant dialogue style
 └── __main__.py     → CLI and voice conversation loop
 tests/              → unit and optional integration tests
-scripts/            → voice preparation and training helpers
+scripts/            → launchers, model downloads, and benchmarks
 models/             → local downloaded voices and wake models (ignored)
 data/               → local recordings and databases (ignored)
 ```
@@ -76,14 +78,16 @@ cp .env.example .env   # add your API keys
 raphael start
 ```
 
+Use `raphael start` for a concise console showing microphone/listening status,
+recognized speech, RAPHAEL's replies, startup readiness, and warnings/errors. Use `raphael start dev` when
+troubleshooting to show detailed DEBUG and INFO logs. The same modes work with
+`raphael listen` and `raphael listen dev`.
+
 In fish, activate with `source .venv/bin/activate.fish`. You can also launch directly
 without activating the environment with `.venv/bin/raphael start`.
 
 Training dependencies are optional: use `pip install -e ".[train]"` for custom
-wake-word training. Piper voice fine-tuning uses the separate environment expected
-by `scripts/train_piper_voice.sh`; normal listening does not import that toolchain.
-Voice preparation requires `ffmpeg` on your PATH. A failed preparation leaves the
-existing dataset intact and removes its temporary extraction files.
+wake-word training. Normal listening does not import that toolchain.
 
 Run `pytest` for unit tests and `ruff check src tests` for linting. Tests requiring
 real devices, downloaded models, or wake-training dependencies are separate:
@@ -102,13 +106,11 @@ GROQ_API_KEY=
 
 Ollama runs locally and needs no key — it's the free offline fallback.
 
-For local Piper speech, set `TTS_ENGINE=piper` and choose an installed `TTS_VOICE`
-(for example `en_GB-alan-medium` or `custom_voice`). Fish Speech requires its local
-API server; Edge-TTS requires network access.
-When `TTS_ENGINE` is omitted or set to `auto`, the engine follows the voice:
-Piper names use Piper, `*Neural` voices use Edge-TTS, and `mommy`/`fish*` use Fish
-Speech. Explicit engine choices take priority. Fish Speech falls back to an
-installed local Piper voice before trying a network voice.
+The example configuration selects Chatterbox Turbo with the `raphael` voice profile.
+Without `.env` overrides, code defaults use Piper/Amy through `TTS_ENGINE=auto`. If Turbo
+cannot initialize or synthesize, it falls back to the local Piper RAPHAEL voice,
+then Amy. To use Piper directly, set `TTS_ENGINE=piper` and choose a local Piper
+voice such as `en_US-amy-medium` or `en_US-raphael-medium`.
 
 The default NIM model is `nvidia/nemotron-3.5-lightning-30b-a3b`; existing installs
 should update `NIM_MODEL` in `.env` if it still selects the retired Nemotron 3 Super.
@@ -128,8 +130,12 @@ remain available, and continuation requests retain the preceding task's routing.
 The voice persona is a warm, mature, confident feminine companion: playful in
 casual conversation, focused during tasks, and patient when you're frustrated.
 She uses expressive, natural conversational phrasing, with concise answers that
-stay warm and follow-ups when useful. Human-like delivery does not require invented
-personal experiences or repeated AI disclaimers in ordinary small talk.
+stay warm, specific curiosity about your interests, and reasoned opinions of her own.
+She can give one friendly challenge, then respect your decision; personal questions
+follow openings in what you say. During an existing conversation, she may revisit a
+relevant thread from supplied history or offer a fresh thought, leaving room for the
+conversation to end. Human-like delivery does not require invented personal experiences
+or repeated AI disclaimers in ordinary small talk.
 Set `RAPHAEL_PREFERRED_NAME` to the name you want her to use. English is the
 default language. Edit `persona.txt` in the project folder to customize her tone,
 humor, affection, language, and reply length. It is reloaded before every AI reply;
@@ -137,6 +143,12 @@ restart once after installing this feature, then edits take effect while running
 Copy `persona.example.txt` to `persona.txt` for a fresh template. Your personal
 file is excluded from Git. `RAPHAEL_PERSONA_FILE` selects another path (relative
 to the working directory), or an empty value disables custom preferences.
+You can also say “be more playful” or “change your tone to be calmer” to persist
+a style adjustment. “Can you update your persona?” starts a short follow-up where
+RAPHAEL asks what to change, then saves your next clear style instruction. Say
+“reset your persona” to remove RAPHAEL's managed adjustment while keeping the rest
+of `persona.txt` intact. The initial request must be reliably transcribed and
+explicitly address RAPHAEL; the follow-up must also be reliable.
 Missing, unreadable, invalid UTF-8, or oversized files fall back to the built-in
 personality. Keep the file under 32 KiB; `#` comment lines are ignored. These
 preferences shape AI replies; they do not change TTS voices, STT models, local
@@ -326,6 +338,34 @@ system default. Numeric device indices in `.env` are parsed as integers.
 See [release checks](docs/release-checks.md) for automated validation and the
 live microphone checks required before tagging a release.
 
+### Memory confirmation and local actions
+
+Say “Raphael, my favorite game is CS2” and she proposes the fact. Say “Raphael, yes”
+to save it or “Raphael, no” to reject it. Corrections also require confirmation;
+“Raphael, remember my favorite game is CS2” saves immediately. Proposals expire
+after 60 seconds, a topic change, cancellation, or restart. In ambient mode, the
+confirmation must address Raphael directly. Rejecting a fact does not erase the
+conversation transcript or summaries; it prevents a structured long-term fact write.
+
+These commands run locally without an AI request:
+
+- “Raphael, how much RAM am I using?”
+- “Raphael, what's my GPU temperature?”
+- “Raphael, how many CPU cores do I have?”
+- “Raphael, open Discord.”
+- “Raphael, can you open Discord for me?”
+
+Application launching supports Discord (with Vesktop fallback), Vesktop, Firefox,
+Chromium, Steam, and VS Code/VSCodium on Linux when their executable is on PATH.
+Natural requests can include “can you,” “please,” and “for me.” Exact spelling
+such as “D I S C O R D” is also recognized. After “Raphael, I meant D I S C O R D,”
+you can say “Raphael, can you open it for me?” within 60 seconds. An unrelated
+request, cancellation, or uncertain transcription clears that reference. Unknown
+or ambiguous names prompt a clarification rather than a guessed launch.
+It accepts no shell commands, paths, URLs, or flags. In ambient mode, launching
+requires a direct address. A launch acknowledgement means the process was started;
+it does not confirm that a window appeared. See [action development](docs/actions.md).
+
 ### Streaming replies and shared GPU use
 
 `TTS_STREAMING=true` (the default) connects provider tokens to sentence-sized speech.
@@ -362,7 +402,7 @@ RAPHAEL is being built one feature at a time, fully refined before moving to the
 | `v0.1` | Project foundation | ✅ |
 | `v0.2` | Core AI (wake word → STT → router → LLM → TTS) | Tagged |
 | `v0.3` | Persistent memory + streamed voice | Development; live acceptance pending |
-| `v0.4` | Skills and actions | ⬜ |
+| `v0.4` | Skills and actions | Local framework, system info, app launching implemented |
 | `v0.5` | Web dashboard | ⬜ |
 | `v0.6` | Telegram + Discord | ⬜ |
 | `v0.7` | Voice tone awareness | ⬜ |

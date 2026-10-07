@@ -2,6 +2,7 @@
 
 import hashlib
 import re
+import time
 from datetime import datetime
 
 from raphael.memory.models import MemoryItem, MemoryType
@@ -65,6 +66,12 @@ class MemoryService:
     def __init__(self, store: MemoryStore) -> None:
         self.store = store
         self.focus_key: str | None = None
+        self._pending: tuple[str, MemoryItem, float] | None = None
+
+    def cancel_proposal(self) -> None:
+        """Discard a proposal when dialogue ends or another local task takes over."""
+        self._pending = None
+        self.focus_key = None
 
     def observe_topic(self, text: str) -> None:
         """Track an explicit topic for a subsequent short correction."""
@@ -80,10 +87,30 @@ class MemoryService:
         if match:
             self.focus_key = "user:favorite_" + match.group(1).replace("colour", "color")
 
-    def handle(self, text: str, now: datetime | None = None) -> str | None:
-        """Save recognized facts or commands and return an honest local acknowledgement."""
+    def handle(
+        self, text: str, now: datetime | None = None, *, authorized: bool = True,
+    ) -> str | None:
+        """Propose conversational facts; save explicit commands or timely confirmations.
+
+        Callers must authorize writes independently of inferred dialogue intent.
+        Pending proposals live only in RAM and survive neither restart nor topic changes.
+        """
+        if not authorized:
+            self.cancel_proposal()
+            return None
         now = now or datetime.now()
         original = text.strip().replace("’", "'")
+        pending, self._pending = self._pending, None
+        if pending is not None and time.monotonic() <= pending[2]:
+            answer = original.casefold().strip(" .!?")
+            if answer in {"yes", "yeah", "yes please", "save it", "remember that", "confirm"}:
+                return self._save(pending[0], pending[1])
+            if answer in {"no", "no thanks", "don't save it", "do not save it", "cancel",
+                          "never mind", "forget that"}:
+                self.focus_key = None
+                return "Okay, I won't save that fact."
+        elif pending is not None:
+            self.focus_key = None
         explicit = re.match(
             r"^(?:please\s+)?(?:remember(?:\s+that)?|note\s+that)\s+(.+)$",
             original,
@@ -217,19 +244,27 @@ class MemoryService:
             )
         ):
             return None
-        old = self.store.get_fact(key)
-        self.store.upsert_fact(
-            key,
-            MemoryItem(
-                content=clean,
-                memory_type=kind,
-                source="user_explicit",
-                metadata={"value": value} if value is not None else {},
-            ),
+        item = MemoryItem(
+            content=clean, memory_type=kind, source="user_explicit",
+            metadata={"value": value} if value is not None else {},
         )
+        if not explicit:
+            old = self.store.get_fact(key)
+            if old is not None and old.content == clean:
+                self.focus_key = key
+                return f"I already remember that. {clean}"
+            self.focus_key = key
+            self._pending = (key, item, time.monotonic() + 60.0)
+            return f"Should I remember this? {clean} Say yes to save it or no to skip it."
+        return self._save(key, item)
+
+    def _save(self, key: str, item: MemoryItem) -> str:
+        """Persist exactly the explicit or confirmed fact and report the result."""
+        old = self.store.get_fact(key)
+        self.store.upsert_fact(key, item)
         self.focus_key = key
-        action = "updated" if old and old.content != clean else "saved"
-        return f"I've {action} that. {clean}"
+        action = "updated" if old and old.content != item.content else "saved"
+        return f"I've {action} that. {item.content}"
 
     def _forget(self, topic: str) -> str:
         """Resolve specific saved topics, refusing an ambiguous broad deletion."""

@@ -143,6 +143,79 @@ def test_long_followup_is_judged_using_when_speech_started(monkeypatch):
     assert ambient.decide("Explain that a little more.", router, [], started_at=110).addressed
 
 
+def test_long_pause_followup_uses_recent_dialogue_but_requires_context_match(monkeypatch):
+    from raphael.providers.base import ChatMessage
+
+    clock = [100.0]
+    monkeypatch.setattr('raphael.audio.ambient.time.monotonic', lambda: clock[0])
+    ambient = AmbientConversation(followup_seconds=20)
+    ambient.record_addressed('user', 'What are we working on next?')
+    ambient.record_addressed('assistant', 'We could improve the roadmap and memory system.')
+    clock[0] += 90
+
+    router = MagicMock()
+    router.send.return_value = LLMResponse(
+        '{"listener":"assistant","confidence":0.96,"interpretation":""}',
+        'test', 'test',
+    )
+    turns = [
+        ChatMessage('user', 'What are we working on next?'),
+        ChatMessage('assistant', 'We could improve the roadmap and memory system.'),
+    ]
+    decision = ambient.decide('Which roadmap version are we on?', router, turns)
+    assert decision.addressed and decision.reason == 'clear_followup'
+    assert ambient.deadline == 0.0  # The short direct-follow-up window stays expired.
+    gate_input = router.send.call_args.args[0][-1].content
+    assert 'roadmap version' in gate_input
+    assert 'improve the roadmap' in gate_input
+
+
+def test_unrelated_speech_after_active_window_is_context_checked_not_accepted(monkeypatch):
+    from raphael.providers.base import ChatMessage
+
+    clock = [100.0]
+    monkeypatch.setattr('raphael.audio.ambient.time.monotonic', lambda: clock[0])
+    ambient = AmbientConversation(followup_seconds=20)
+    ambient.record_addressed('assistant', 'The roadmap is ready.')
+    clock[0] += 90
+    router = MagicMock()
+    router.send.return_value = LLMResponse(
+        '{"listener":"other","confidence":0.97,"interpretation":""}',
+        'test', 'test',
+    )
+    turns = [ChatMessage('assistant', 'The roadmap is ready.')]
+    decision = ambient.decide('Can somebody bring the groceries in?', router, turns)
+    assert not decision.addressed and decision.reason == 'other_listener'
+    router.send.assert_called_once()
+
+
+def test_interrupted_followup_gate_receives_persistent_and_inflight_context():
+    from raphael.providers.base import ChatMessage
+
+    ambient = AmbientConversation()
+    ambient.record_addressed('user', 'Help me understand the roadmap.')
+    router = MagicMock()
+    router.send.return_value = LLMResponse(
+        '{"listener":"assistant","confidence":0.96,"interpretation":""}',
+        'test', 'test',
+    )
+    previous_turns = [
+        ChatMessage('user', 'What should we improve?'),
+        ChatMessage('assistant', 'We could work on the roadmap.'),
+    ]
+
+    decision = ambient.decide(
+        'Could you explain the first part?', router, previous_turns, during_reply=True,
+    )
+
+    assert decision.addressed
+    recent = json.loads(router.send.call_args.args[0][-1].content)['recent_dialogue']
+    assert [item['content'] for item in recent] == [
+        'What should we improve?', 'We could work on the roadmap.',
+        'Help me understand the roadmap.',
+    ]
+
+
 def test_vad_preserves_partial_chunks_and_converts_integer_audio(monkeypatch):
     from raphael.audio.activity import SpeechActivity
 
@@ -162,7 +235,7 @@ def test_vad_preserves_partial_chunks_and_converts_integer_audio(monkeypatch):
 
 def run_callbacks(
     tmp_path, monkeypatch, utterances, *, ambient=True, router=None, observed=None,
-    tts=None, interrupted=None,
+    tts=None, interrupted=None, persona_file=None,
     streaming=False, clock=None, ai_transcripts=False, cli_args=(), tts_enabled=True,
 ):
     """Run real CLI callbacks using an isolated DB and no audio hardware."""
@@ -176,6 +249,7 @@ def run_callbacks(
         _env_file=None, memory_db_path=str(tmp_path / "memory.db"), tts_streaming=streaming,
         show_ai_transcripts=ai_transcripts,
         tts_enabled=tts_enabled,
+        raphael_persona_file=str(persona_file) if persona_file else "persona.txt",
     )
     monkeypatch.setattr(config, "get_settings", lambda: settings)
     monkeypatch.setattr(platform, "get_audio_backend", MagicMock())
@@ -901,7 +975,11 @@ def test_uncertain_recognition_does_not_auto_save_a_fact(tmp_path, monkeypatch):
     try:
         assert store.get_fact("user:favorite_game") is None
         assert turns[0].content == "My favorite game is CS2."
-        assert "Preserve names" in router.send.call_args.args[0][0].content
+        prompt = router.send.call_args.args[0][0].content
+        assert "transcribed from speech" in prompt
+        assert "contradictory, nonsensical" in prompt
+        assert "ask one brief, specific question" in prompt
+        assert "guessed correction as a confirmed fact" in prompt
     finally:
         store.close()
 
@@ -946,6 +1024,54 @@ def test_ambient_local_greeting_opens_followup_with_actual_context(tmp_path, mon
         assert payload["recent_dialogue"][0]["content"] == "Raphael."
         assert payload["recent_dialogue"][1]["role"] == "assistant"
         assert [turn.role for turn in turns] == ["user", "assistant"]
+    finally:
+        store.close()
+
+
+def test_explicit_persona_request_updates_file_without_calling_provider(tmp_path, monkeypatch):
+    persona_file = tmp_path / "persona.txt"
+    persona_file.write_text("Keep a warm tone.\n", encoding="utf-8")
+    router = MagicMock()
+    _router, tts, _loop, store, turns = run_callbacks(
+        tmp_path, monkeypatch, [("Raphael, be more playful.", {})],
+        router=router, persona_file=persona_file,
+    )
+    try:
+        contents = persona_file.read_text(encoding="utf-8")
+        assert "Keep a warm tone." in contents
+        assert "more playful" in contents
+        assert turns[-1].provider == "local" and turns[-1].model == "persona"
+        router.send.assert_not_called()
+        tts.speak.assert_called_once_with(
+            "Got it. I'll use that style from now on.", block=True,
+        )
+    finally:
+        store.close()
+
+
+def test_persona_change_question_collects_and_saves_next_followup(tmp_path, monkeypatch):
+    persona_file = tmp_path / "persona.txt"
+    router = MagicMock()
+    router.send.return_value = LLMResponse(
+        '{"listener":"assistant","confidence":0.98,"interpretation":""}',
+        "test", "test",
+    )
+    _router, tts, _loop, store, turns = run_callbacks(
+        tmp_path, monkeypatch,
+        [
+            ("Raphael, can you update your persona?", {}),
+            ("Curious, and ask more questions when you don't know something.", {}),
+        ],
+        router=router,
+        persona_file=persona_file,
+    )
+    try:
+        assert "ask more questions" in persona_file.read_text(encoding="utf-8")
+        assert router.send.call_count == 1  # The follow-up is gated; persona saving is local.
+        assert [turn.model for turn in turns if turn.role == "assistant"] == [
+            "persona", "persona",
+        ]
+        assert tts.speak.call_args_list[-1].args[0] == "Got it. I'll use that style from now on."
     finally:
         store.close()
 
@@ -1298,5 +1424,155 @@ def test_live_active_conversation_accepts_uncertain_followup(tmp_path, monkeypat
             'what are you good at?', followup,
         ]
         assert tts.speak.call_count == 2
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize('answer, saved', [('Raphael, yes.', True), ('Raphael, no.', False)])
+def test_memory_proposal_confirmation_in_real_voice_handler(tmp_path, monkeypatch, answer, saved):
+    router, tts, _loop, store, turns = run_callbacks(
+        tmp_path, monkeypatch,
+        [('Raphael, my favorite game is CS2.', {}), (answer, {})],
+    )
+    try:
+        assert (store.get_fact('user:favorite_game') is not None) is saved
+        assert 'Should I remember' in tts.speak.call_args_list[0].args[0]
+        assert 'hey raphael, yes' in tts.speak.call_args_list[0].args[0]
+        assert len(turns) == 4
+        router.send.assert_not_called()
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize('interruption', [
+    ('Raphael, cancel.', {}), ('Raphael, what time is it?', {}),
+    ('Raphael, yes.', {'stt_confidence': 0.45}),
+])
+def test_memory_proposal_does_not_survive_cancel_topic_change_or_uncertainty(
+    tmp_path, monkeypatch, interruption,
+):
+    router = MagicMock()
+    router.send.return_value = LLMResponse('Okay.', 'test', 'test')
+    _router, _tts, _loop, store, _turns = run_callbacks(
+        tmp_path, monkeypatch,
+        [('Raphael, my favorite game is CS2.', {}), interruption, ('Raphael, yes.', {})],
+        router=router,
+    )
+    try:
+        assert store.get_fact('user:favorite_game') is None
+    finally:
+        store.close()
+
+
+def test_local_action_voice_handler_uses_telemetry_without_provider(tmp_path, monkeypatch):
+    from raphael.platform.system_info import SystemSnapshot
+
+    monkeypatch.setattr('raphael.actions.system_info.get_system_snapshot',
+                        lambda **kwargs: SystemSnapshot(ram_used_gb=8, ram_total_gb=16))
+    router, tts, _loop, store, turns = run_callbacks(
+        tmp_path, monkeypatch, [('Raphael, how much RAM am I using?', {})],
+    )
+    try:
+        router.send.assert_not_called()
+        assert '8 of 16 GB' in tts.speak.call_args.args[0]
+        assert [turn.role for turn in turns] == ['user', 'assistant']
+        assert turns[-1].model == 'action'
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize('direct', [True, False])
+def test_application_launch_requires_direct_address_in_voice_handler(tmp_path, monkeypatch, direct):
+    launch = MagicMock()
+    monkeypatch.setattr('raphael.actions.open_app.subprocess.Popen', launch)
+    monkeypatch.setattr('raphael.actions.open_app.sys.platform', 'linux')
+    monkeypatch.setattr('raphael.actions.open_app.shutil.which', lambda name: '/usr/bin/discord')
+    router = MagicMock()
+    router.send.return_value = LLMResponse(
+        '{"listener": "assistant", "confidence": 0.99}', 'test', 'test',
+    )
+    _router, tts, _loop, store, _turns = run_callbacks(
+        tmp_path, monkeypatch,
+        [('Raphael.', {}), ('Raphael, open Discord.' if direct else 'Open Discord.', {})],
+        router=router,
+    )
+    try:
+        assert launch.call_count == int(direct)
+        assert ('sent the launch request' if direct else 'address Raphael directly') in (
+            tts.speak.call_args.args[0]
+        )
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize('ambient', [True, False])
+def test_natural_discord_request_uses_local_launcher(tmp_path, monkeypatch, ambient):
+    launch = MagicMock()
+    monkeypatch.setattr('raphael.actions.open_app.subprocess',
+                        SimpleNamespace(Popen=launch, DEVNULL=-3))
+    monkeypatch.setattr('raphael.actions.open_app.sys.platform', 'linux')
+    monkeypatch.setattr('raphael.actions.open_app.shutil.which',
+                        lambda name: '/usr/bin/discord' if name == 'discord' else None)
+    router, tts, _loop, store, turns = run_callbacks(
+        tmp_path, monkeypatch, [('Raphael, can you open Discord for me?', {})],
+        ambient=ambient,
+    )
+    try:
+        launch.assert_called_once()
+        router.send.assert_not_called()
+        assert 'sent the launch request' in tts.speak.call_args.args[0]
+        assert turns[-1].model == 'action'
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize('interrupted', [False, True])
+def test_corrected_spelling_then_open_it_reaches_launcher(tmp_path, monkeypatch, interrupted):
+    launch = MagicMock()
+    monkeypatch.setattr('raphael.actions.open_app.subprocess',
+                        SimpleNamespace(Popen=launch, DEVNULL=-3))
+    monkeypatch.setattr('raphael.actions.open_app.sys.platform', 'linux')
+    monkeypatch.setattr('raphael.actions.open_app.shutil.which',
+                        lambda name: '/usr/bin/discord' if name == 'discord' else None)
+    router = MagicMock()
+    router.send.return_value = LLMResponse('You mean Discord.', 'test', 'test')
+    canceled = Event()
+    canceled.set()
+    correction = 'No, no, no, I meant D I S C O R D'
+    utterances = [
+        (correction if interrupted else 'Raphael, ' + correction,
+         {'supersedes_cancel_event': canceled} if interrupted else {}),
+        ('Raphael, can you open it for me?', {}),
+    ]
+    observed = [('Raphael, can you open this quarter for me?', {
+        'superseded': True, 'cancel_event': canceled,
+    })] if interrupted else None
+    _router, tts, _loop, store, turns = run_callbacks(
+        tmp_path, monkeypatch, utterances, router=router, observed=observed,
+    )
+    try:
+        launch.assert_called_once()
+        assert launch.call_args.args[0] == ['/usr/bin/discord']
+        assert router.send.call_count == 1  # Only the correction goes to the model.
+        assert 'sent the launch request' in tts.speak.call_args.args[0]
+        assert turns[-1].model == 'action'
+    finally:
+        store.close()
+
+
+def test_uncertain_app_name_cannot_supply_later_launch_context(tmp_path, monkeypatch):
+    launch = MagicMock()
+    monkeypatch.setattr('raphael.actions.open_app.subprocess',
+                        SimpleNamespace(Popen=launch, DEVNULL=-3))
+    router = MagicMock()
+    router.send.return_value = LLMResponse('Which app did you mean?', 'test', 'test')
+    _router, tts, _loop, store, _turns = run_callbacks(
+        tmp_path, monkeypatch,
+        [('Raphael, I meant Discord', {'stt_confidence': 0.45}),
+         ('Raphael, can you open it for me?', {})], router=router,
+    )
+    try:
+        launch.assert_not_called()
+        assert 'Which application' in tts.speak.call_args.args[0]
     finally:
         store.close()
