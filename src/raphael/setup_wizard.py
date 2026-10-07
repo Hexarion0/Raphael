@@ -1,15 +1,53 @@
 """Interactive setup and configuration wizard for RAPHAEL."""
 
+import json
 from pathlib import Path
 
 from dotenv import dotenv_values, set_key, unset_key
 
 from raphael.audio.tts import TextToSpeech, resolve_tts_engine
-from raphael.config import get_settings
+from raphael.config import AudioConfig, get_settings
 from raphael.logging import get_logger
 from raphael.platform import get_audio_backend
 
 logger = get_logger("setup")
+
+
+def custom_voice_asset_problems(configuration: dict[str, str]) -> list[str]:
+    """Check local custom-voice prerequisites without loading models or downloading files."""
+    root = Path(__file__).resolve().parents[2]
+    defaults = AudioConfig()
+
+    def local_path(value: str) -> Path:
+        path = Path(value).expanduser()
+        return path if path.is_absolute() else root / path
+
+    problems = []
+    python = local_path(configuration.get("TTS_CHATTERBOX_PYTHON", defaults.tts_chatterbox_python))
+    if not python.is_file():
+        problems.append(f"Turbo Python environment: {python}")
+    profile_root = local_path(configuration.get("TTS_VOICE_PROFILES", defaults.tts_voice_profiles))
+    manifest = profile_root / configuration["TTS_VOICE"] / "voice.json"
+    try:
+        profile = json.loads(manifest.read_text(encoding="utf-8"))
+        if profile["engine"] != "chatterbox_turbo":
+            raise ValueError("Expected a Chatterbox Turbo profile")
+        for key in ("reference_audio", "reference_transcript"):
+            path = local_path(profile[key])
+            if not path.is_file() or not path.stat().st_size:
+                problems.append(f"{key}: {path}")
+    except (OSError, ValueError, KeyError, TypeError):
+        problems.append(f"Missing or invalid voice profile: {manifest}")
+    model = local_path(configuration.get("TTS_CHATTERBOX_MODEL", defaults.tts_chatterbox_model))
+    for name in (
+        "inventory.json", "t3_turbo_v1.safetensors", "s3gen_meanflow.safetensors",
+        "ve.safetensors", "added_tokens.json", "merges.txt", "special_tokens_map.json",
+        "tokenizer_config.json", "vocab.json",
+    ):
+        path = model / name
+        if not path.is_file() or not path.stat().st_size:
+            problems.append(f"Turbo model file: {path}")
+    return problems
 
 
 def run_setup_wizard() -> None:
@@ -58,24 +96,29 @@ def run_setup_wizard() -> None:
 
     # 2. Voice and Speech Settings
     print("\n--- [2/4] Text-to-Speech (TTS) Voice ---")
-    voices = [
-        ("en_GB-alan-medium", "British Male (JARVIS-style default)"),
-        ("en_GB-southern_english_female-medium", "British Female"),
-        ("en_US-ryan-medium", "American Male (Warm & Clear)"),
-        ("en_US-amy-medium", "American Female (Natural & Friendly)"),
-        ("en_US-lessac-medium", "American Female (Articulate)"),
-    ]
-    for idx, (v_name, desc) in enumerate(voices, 1):
-        print(f"  [{idx}] {v_name:<38} - {desc}")
-
-    current_voice = current_env.get("TTS_VOICE", "en_GB-alan-medium")
-    voice_choice = input(f"\nSelect voice [1-5] (Current: {current_voice}): ").strip()
-    if voice_choice.isdigit() and 1 <= int(voice_choice) <= len(voices):
-        current_env["TTS_VOICE"] = voices[int(voice_choice) - 1][0]
-    elif voice_choice:
-        current_env["TTS_VOICE"] = voice_choice
+    print("  [1] RAPHAEL custom voice — Chatterbox Turbo (NVIDIA GPU required)")
+    print("      Requires the separate Turbo environment, model, and private voice reference.")
+    print("  [2] Default Amy — Piper (lighter, works on CPU)")
+    current_voice = current_env.get("TTS_VOICE", "en_US-amy-medium")
+    while True:
+        voice_choice = input(
+            f"\nSelect voice [1-2] (Enter to keep {current_voice}): "
+        ).strip()
+        if voice_choice in {"", "1", "2"}:
+            break
+        print("Please enter 1 for RAPHAEL or 2 for Amy.")
+    if voice_choice == "1":
+        current_env["TTS_VOICE"] = "raphael"
+        current_env["TTS_ENGINE"] = "chatterbox_turbo"
+    elif voice_choice == "2":
+        current_env["TTS_VOICE"] = "en_US-amy-medium"
+        current_env["TTS_ENGINE"] = "piper"
     else:
         current_env["TTS_VOICE"] = current_voice
+        current_env.setdefault(
+            "TTS_ENGINE",
+            "chatterbox_turbo" if current_voice == "raphael" else resolve_tts_engine(current_voice),
+        )
 
     # 3. Audio Devices
     print("\n--- [3/4] Audio Devices ---")
@@ -128,8 +171,6 @@ def run_setup_wizard() -> None:
     }
     for key, value in defaults.items():
         current_env.setdefault(key, value)
-    if current_env["TTS_VOICE"] != current_voice or "TTS_ENGINE" not in current_env:
-        current_env["TTS_ENGINE"] = resolve_tts_engine(current_env["TTS_VOICE"])
     if not env_path.exists():
         env_path.write_text("# RAPHAEL Configuration File\n", encoding="utf-8")
     for key in original_keys.keys() - current_env.keys():
@@ -146,20 +187,39 @@ def run_setup_wizard() -> None:
 
     # Pre-download selected TTS voice if not present
     print("\n--- Testing Voice Output ---")
-    chosen_voice = current_env.get("TTS_VOICE", "en_GB-alan-medium")
-    print(f"Testing voice: '{chosen_voice}'...")
-    try:
-        tts = TextToSpeech(voice_name=chosen_voice, enabled=True)
-        success = tts.speak(
-            "Greetings, sir. RAPHAEL configuration is complete and operational.", block=True
-        )
-        if success:
-            print("✅ Audio test successful!")
-        else:
-            print("⚠️ Audio test failed: speech playback did not succeed.")
-    except Exception as err:
-        print(f"⚠️ Audio test skipped or failed: {err}")
+    chosen_voice = current_env["TTS_VOICE"]
+    custom_voice = current_env["TTS_ENGINE"] in {"chatterbox", "chatterbox_turbo"}
+    problems = custom_voice_asset_problems(current_env) if custom_voice else []
+    if problems:
+        print("⚠️ Custom voice is not ready. Missing or invalid local assets:")
+        for problem in problems:
+            print(f"  - {problem}")
+        print("Your choice is saved, but the custom voice audio test was skipped.")
+        print("Restore/install these assets and rerun setup, or choose Amy to get started.")
+        print("See docs/chatterbox-turbo-integration.md for the custom voice requirements.")
+    else:
+        print(f"Testing voice: '{chosen_voice}'...")
+        tts = None
+        try:
+            tts = TextToSpeech(
+                voice_name=chosen_voice, engine=current_env["TTS_ENGINE"], enabled=True,
+            )
+            success = tts.speak("Hi, I'm Raphael. Let's check that you can hear me.", block=True)
+            if success:
+                print("✅ Audio test successful!")
+                if custom_voice:
+                    print("If Turbo failed, playback used a local Piper fallback; check warnings.")
+            else:
+                print("⚠️ Audio test failed: speech playback did not succeed.")
+        except Exception as err:
+            print(f"⚠️ Audio test skipped or failed: {err}")
+        finally:
+            if tts is not None:
+                tts.close()
 
     print("\n" + "=" * 55)
-    print("  Setup Complete! Run: raphael start")
+    if problems:
+        print("  Configuration saved. Custom voice setup needs the assets listed above.")
+    else:
+        print("  Setup Complete! Run: raphael start")
     print("=" * 55 + "\n")
