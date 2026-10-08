@@ -17,7 +17,7 @@ before treating it as ready for everyday use.
 | Memory | SQLite conversations, summaries, confirmed facts, corrections, forgetting, automated restart recall | Live voice-based restart acceptance |
 | Actions | Trusted module discovery, validation, local telemetry, allowlisted Linux app launching | Model-selected calls, web search, reminders, live desktop launch acceptance |
 | Personality | Editable preferences, curiosity, voice-requested style updates/reset | Continued evaluation during real conversations |
-| Setup | Amy/custom voice choice, device/key configuration, missing-asset reporting | Automatic Turbo environment/model setup and clean-machine end-to-end validation |
+| Setup | Amy/custom voice choice, device/key configuration, missing-asset reporting | Automatic Turbo setup, a desktop installer with a managed runtime, and clean-machine validation |
 | Dashboard, messaging, tone, Windows, presence | Planned | Implementation |
 
 A checked item below means the implementation exists. It does not establish
@@ -106,10 +106,24 @@ not identify speakers. Those limitations remain explicit in the product docs.
 - [ ] Package or resolve the worker and voice manifest for custom Turbo use outside
       a source checkout; a wheel alone currently does not include those assets.
 - [ ] Reduce optional inference dependencies after measuring what the worker actually needs.
+- [ ] Build a desktop installer that bundles or automatically manages Python and
+      dependencies, so users do not create or activate a virtual environment.
+- [ ] Add a desktop launcher that works outside the source checkout and starts
+      the required voice worker automatically.
+- [ ] Manage model downloads and voice selection during first launch; keep the
+      heavier custom voice optional and import its private reference separately.
+- [ ] Validate the packaged app on a clean machine without a preinstalled Python
+      environment, including Amy, custom voice requirements, and missing-GPU recovery.
+- [ ] Verify packaged-app upgrades preserve configuration, memory, and private voice assets.
 
 The existing custom voice needs its original reference audio/transcript. A Git clone
 contains the manifest, not those assets. The heavier Turbo installation should remain
 optional. See [custom voice requirements](chatterbox-turbo-integration.md).
+
+The current source installation still uses `.venv` and the separate Turbo
+environment. The desktop installer should manage these runtime needs internally;
+developers can keep virtual environments for development. Packaging simplifies
+setup but does not remove the storage required for dependencies and models.
 
 ## Skills and actions — v0.4
 
