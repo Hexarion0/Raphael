@@ -50,6 +50,39 @@ def test_cross_restart_conversation_persistence(temp_store: MemoryStore):
     assert messages[1].content == "Hello Raphael, my name is Hexarion"
 
 
+def test_archived_interruption_notes_are_metadata_not_assistant_speech(temp_store):
+    manager = ConversationManager(store=temp_store, session_id="interrupted")
+    manager.add_turn("user", "Explain streaming.")
+    manager.add_turn("assistant", "The first part.\n[Playback was interrupted.]")
+    manager.add_turn("assistant", "[Playback was interrupted.]")
+    manager.add_turn("user", "What does [Playback was interrupted.] mean?")
+    restored = ConversationManager(store=temp_store, session_id="interrupted")
+    messages = restored.get_active_messages("Be helpful.")
+    assistant = [message.content for message in messages if message.role == "assistant"]
+    assert assistant == ["The first part."]
+    assert any("interrupted" in message.content for message in messages if message.role == "system")
+    assert messages[-1].content == "What does [Playback was interrupted.] mean?"
+    assert temp_store.get_recent_turns("interrupted")[1].content.endswith(
+        "[Playback was interrupted.]"
+    )  # Stored history is retained.
+
+
+def test_summary_does_not_learn_internal_status_as_assistant_dialogue(temp_store):
+    manager = ConversationManager(
+        store=temp_store, session_id="status-summary", max_turns=2, auto_summarize_threshold=2,
+    )
+    manager.add_turn("user", "Explain streaming.")
+    manager.add_turn("assistant", "The first part.\n[Playback was interrupted.]")
+    manager.add_turn("user", "Continue.")
+    manager.add_turn("assistant", "The rest.")
+    provider = MagicMock()
+    provider.send.return_value = LLMResponse("We discussed streaming.", "test", "test")
+    manager.summarize_older_turns(provider)
+    transcript = provider.send.call_args.args[0][-1].content
+    assert "Assistant: The first part." in transcript
+    assert "[Playback was interrupted.]" not in transcript
+
+
 def test_sliding_context_window_trimming(temp_store: MemoryStore):
     """Verify that when turn count exceeds max_turns, only the latest N turns are returned."""
     manager = ConversationManager(store=temp_store, session_id="overflow_session", max_turns=4)

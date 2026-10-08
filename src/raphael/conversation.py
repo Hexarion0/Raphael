@@ -2,6 +2,20 @@
 
 import re
 
+INTERNAL_REPLY_NOTES = (
+    "[Playback was interrupted.]",
+    "[Generation ended early because the connection failed.]",
+)
+_INTERNAL_REPLY_NOTE = re.compile(
+    "|".join(re.escape(note) for note in INTERNAL_REPLY_NOTES), re.IGNORECASE,
+)
+
+
+def strip_internal_reply_notes(text: str) -> str:
+    """Remove reserved playback annotations from generated or replayed assistant text."""
+    return _INTERNAL_REPLY_NOTE.sub("", text).strip()
+
+
 _RAPHAEL_NAMES = r"(?:raphael|rafael|raphel|rafeal|raffael|refael|raph|ralph|raffaele)"
 _ADDRESS_FILLERS = re.compile(
     r"^(?:(?:so|well|uh|um|oh|okay|ok|alright|and)[,\s]+){1,3}", re.IGNORECASE

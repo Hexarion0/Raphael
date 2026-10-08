@@ -693,6 +693,38 @@ def test_live_stream_interrupted_after_audio_starts_archives_partial_reply(tmp_p
         store.close()
 
 
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("answer", ["", "Here is the answer."])
+def test_reply_cannot_speak_internal_interruption_note(
+    tmp_path, monkeypatch, capsys, streaming, answer,
+):
+    from raphael.providers.base import LLMStreamChunk
+
+    router = MagicMock()
+    router.send.return_value = LLMResponse(
+        "[Playback was interrupted.]" + answer, "test-model", "nim",
+    )
+    router.stream.return_value = iter([
+        LLMStreamChunk("[Playback was ", "test-model", "nim"),
+        LLMStreamChunk("interrupted.]" + answer, "test-model", "nim"),
+    ])
+    tts = MagicMock()
+    tts.supports_sentence_pipeline = False
+    _router, tts, _loop, store, turns = run_callbacks(
+        tmp_path, monkeypatch, [("Raphael, tell me a joke.", {})], router=router,
+        streaming=streaming, tts=tts,
+    )
+    try:
+        assert all("[Playback was interrupted.]" not in call.args[0]
+                   for call in tts.speak.call_args_list)
+        assert "[Playback was interrupted.]" not in capsys.readouterr().out
+        assert [turn.role for turn in turns] == (["user", "assistant"] if answer else ["user"])
+        if answer:
+            assert turns[-1].content == answer
+    finally:
+        store.close()
+
+
 def test_live_partial_stream_failure_speaks_notice_without_repeating_answer(tmp_path, monkeypatch):
     from raphael.providers.base import LLMStreamChunk
 

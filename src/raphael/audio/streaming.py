@@ -9,6 +9,7 @@ from contextvars import copy_context
 from dataclasses import dataclass
 
 from raphael.audio.speech_events import strip_speech_events
+from raphael.conversation import INTERNAL_REPLY_NOTES
 from raphael.latency import active_trace, mark
 from raphael.logging import get_logger
 from raphael.providers.base import ChatMessage, LLMResponse, LLMStreamChunk
@@ -17,6 +18,7 @@ logger = get_logger("audio.streaming")
 _READERS = threading.BoundedSemaphore(2)
 _TAGS = ("think", "thought", "reasoning", "reflection")
 _TOKENS = tuple(f"<{tag}>" for tag in _TAGS) + tuple(f"</{tag}>" for tag in _TAGS)
+_STATUS_TOKENS = tuple(note.lower() for note in INTERNAL_REPLY_NOTES)
 
 
 class VisibleText:
@@ -34,10 +36,12 @@ class VisibleText:
         output = []
         while self.pending:
             lowered = self.pending.lower()
-            tokens = ("```",) if self.code else (*_TOKENS, "```")
+            tokens = ("```",) if self.code else (*_TOKENS, *_STATUS_TOKENS, "```")
             token = next((item for item in tokens if lowered.startswith(item)), None)
             if token:
                 self.pending = self.pending[len(token):]
+                if token in _STATUS_TOKENS:
+                    continue
                 if token == "```":
                     self.code = not self.code
                     if not self.hidden:
@@ -465,7 +469,7 @@ def stream_reply(
         )
         if result.error and not result.response.content and not result.canceled:
             raise result.error
-        if not result.response.content and not result.canceled:
+        if not result.response.content.strip() and not result.canceled:
             raise RuntimeError("Provider stream ended without a visible reply")
         return result
     finally:

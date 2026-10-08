@@ -18,6 +18,7 @@ from raphael.audio.chatterbox_worker import ChatterboxTurboWorker, ChatterboxWor
 from raphael.audio.native import sd
 from raphael.audio.speech_events import SpeechEvent, split_speech_event, strip_speech_events
 from raphael.config import get_settings, normalize_audio_device
+from raphael.conversation import strip_internal_reply_notes
 from raphael.logging import get_logger
 
 logger = get_logger("audio.tts")
@@ -296,6 +297,7 @@ class TextToSpeech:
     @staticmethod
     def clean_text_for_speech(text: str) -> str:
         """Clean markdown, code blocks, reasoning tags, emojis, and symbols for spoken speech."""
+        text = strip_internal_reply_notes(text)
         # Strip reasoning / thinking tags <think>...</think> and <thought>...</thought>
         clean = re.sub(r"<(think|thought)>[\s\S]*?</\1>", "", text, flags=re.IGNORECASE)
         clean = re.sub(r"^<(think|thought)>[\s\S]*", "", clean, flags=re.IGNORECASE)

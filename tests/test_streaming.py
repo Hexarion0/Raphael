@@ -43,6 +43,21 @@ def test_delimiters_split_across_chunks_never_speak_thinking_or_code():
     assert hidden.feed("<reasoning>unclosed secret.", final=True) == ""
 
 
+@pytest.mark.parametrize("omit_code", [True, False])
+def test_internal_playback_notes_are_hidden_across_every_chunk_boundary(omit_code):
+    for note in (
+        "[Playback was interrupted.]",
+        "[Generation ended early because the connection failed.]",
+    ):
+        for boundary in range(len(note) + 1):
+            visible = VisibleText(omit_code=omit_code)
+            output = visible.feed(note[:boundary])
+            output += visible.feed(note[boundary:] + "Let's continue.", final=True)
+            assert output == "Let's continue."
+    visible = VisibleText(omit_code=omit_code)
+    assert visible.feed("[chuckle] Hello.", final=True) == "[chuckle] Hello."
+
+
 def test_sentence_boundaries_keep_decimal_and_abbreviation():
     buffer = SentenceBuffer()
     assert buffer.feed("Dr. Smith measured 3.") == []

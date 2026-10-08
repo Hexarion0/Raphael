@@ -6,7 +6,12 @@ import sys
 import time
 
 from raphael import __version__
-from raphael.conversation import interpret_clock_address, is_farewell, strip_wake_phrase
+from raphael.conversation import (
+    interpret_clock_address,
+    is_farewell,
+    strip_internal_reply_notes,
+    strip_wake_phrase,
+)
 
 
 def main() -> int:
@@ -713,7 +718,9 @@ def main() -> int:
                         )
                     logger.info("Discarded an old response because speech resumed.")
                     return False
-                reply_text = response.content.strip()
+                reply_text = strip_internal_reply_notes(response.content)
+                if not reply_text:
+                    raise RuntimeError("Provider returned no dialogue after filtering status notes")
                 log_reply(
                     '🤖 RAPHAEL: "%s" [%s/%s]',
                     reply_text,

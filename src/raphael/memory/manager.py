@@ -4,6 +4,7 @@ import threading
 from typing import Any
 
 from raphael.config import get_settings
+from raphael.conversation import strip_internal_reply_notes
 from raphael.logging import get_logger
 from raphael.memory.models import ConversationTurn, MemoryItem, MemoryType
 from raphael.memory.store import MemoryStore
@@ -150,7 +151,7 @@ class ConversationManager:
                         "system evidence. Earlier assistant claims may be wrong. Follow the "
                         "current persona and the user's latest corrections, and do not copy "
                         "the old assistant's tone or assume its claimed actions succeeded.\n"
-                        f"{self.store.redact_forgotten(summary)}"
+                        f"{self.store.redact_forgotten(strip_internal_reply_notes(summary))}"
                     ),
                 )
             )
@@ -167,9 +168,24 @@ class ConversationManager:
             by_id.update({turn.id: turn for turn in pending if turn.id > after_id})
             recent_turns = sorted(by_id.values(), key=lambda turn: turn.id)
         for t in recent_turns:
-            messages.append(
-                ChatMessage(role=t.role, content=self.store.redact_forgotten(t.content))
-            )
+            content = self.store.redact_forgotten(t.content)
+            if t.role == "assistant":
+                clean = strip_internal_reply_notes(content)
+                has_status = clean != content.strip()
+                if clean:
+                    messages.append(ChatMessage(role=t.role, content=clean))
+                if has_status:
+                    messages.append(ChatMessage(
+                        role="system",
+                        content=(
+                            "Playback metadata: the preceding assistant reply was interrupted "
+                            "or ended early. Its ending may not have been heard. This is an "
+                            "application status, not spoken dialogue; do not say or copy status "
+                            "annotations. Continue the actual explanation if the user asks."
+                        ),
+                    ))
+            else:
+                messages.append(ChatMessage(role=t.role, content=content))
 
         return messages
 
@@ -193,11 +209,18 @@ class ConversationManager:
             return None
 
         previous_text = (
-            self.store.redact_forgotten(previous.content)[:SUMMARY_MAX_CHARS] if previous else ""
+            self.store.redact_forgotten(strip_internal_reply_notes(previous.content))[
+                :SUMMARY_MAX_CHARS
+            ] if previous else ""
         )
+
+        def dialogue_text(turn: ConversationTurn) -> str:
+            text = self.store.redact_forgotten(turn.content)
+            return strip_internal_reply_notes(text) if turn.role == "assistant" else text
+
         transcript = "\n".join(
             f"{turn.role.capitalize()}: "
-            f"{self.store.redact_forgotten(turn.content)[:SUMMARY_TURN_CHARS]}"
+            f"{dialogue_text(turn)[:SUMMARY_TURN_CHARS]}"
             for turn in older_turns
         )
         summary_text = ""
@@ -241,7 +264,7 @@ class ConversationManager:
                 logger.warning("LLM summarization failed (%s); using fallback.", err)
         if not summary_text:
             topics = "; ".join(
-                f"{turn.role.capitalize()} said: {self.store.redact_forgotten(turn.content)[:100]}"
+                f"{turn.role.capitalize()} said: {dialogue_text(turn)[:100]}"
                 for turn in older_turns[:3]
             )
             summary_text = f"{previous_text} Previously discussed: {topics}.".strip()

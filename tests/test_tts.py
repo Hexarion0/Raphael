@@ -8,6 +8,13 @@ import pytest
 from raphael.audio.tts import TextToSpeech
 
 
+def test_internal_status_is_not_spoken_by_direct_tts():
+    assert TextToSpeech.clean_text_for_speech("[Playback was interrupted.]") == ""
+    assert TextToSpeech.clean_text_for_speech(
+        "[Playback was interrupted.] Let's continue."
+    ) == "Let's continue."
+
+
 def test_clean_text_for_speech():
     raw_text = """
     <think>Internal reasoning here that should be stripped</think>
