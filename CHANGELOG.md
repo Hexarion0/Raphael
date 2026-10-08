@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased — 0.3.6 development
+
+- Keep archived playback-status notes out of assistant dialogue sent to providers,
+  and filter echoed status markers from streamed/batch replies and TTS so they
+  cannot be spoken as an answer.
+- Add trusted local actions for system information and allowlisted Linux app
+  launching, including polite requests and recent spelling corrections.
+- Confirm conversational memory proposals before saving; retain explicit
+  remember/forget commands and persistent recall.
+- Add voice-requested personality preferences, contextual ambient follow-ups,
+  and concise/development console modes.
+- Integrate the persistent custom Chatterbox Turbo voice with Piper fallback;
+  remove retired voice experiments and training tools.
+- Offer custom RAPHAEL or default Amy in setup. Check missing custom assets,
+  preserve existing settings, and use CPU/Amy for the fresh-install example.
+- Pin Turbo downloads to the revision accepted by the worker, refreshing an
+  incompatible cached inventory. Keep the custom reference assets private.
+- Retain the later measured Nemotron 3 Super routing choice documented in
+  [latency findings](docs/conversation-latency.md); earlier model changes below
+  describe historical development states.
+- Refresh installation instructions, usage documentation, and the roadmap to
+  separate implemented behavior from pending live acceptance and future work.
+
 ## 0.3.6 — 2026-10-04 (development)
 
 - Reveal AI captions letter by letter during playback, using native Piper audio

@@ -1,5 +1,11 @@
 # Conversation latency findings
 
+This is a historical benchmark report, not a list of current defaults. The
+measured run used a 1.8-second endpoint; current code uses 0.7 seconds of silence
+plus 0.2 seconds of grace. That later 0.9-second setting needs live acceptance
+and does not inherit the no-cut or latency results below. Current configuration
+is documented in the [README](../README.md).
+
 ## Result
 
 RAPHAEL was not waiting for the complete reply. It already requested an SSE stream,

@@ -1,4 +1,9 @@
-# Current Version Stabilization
+# Historical stabilization notes — v0.2 and early v0.3
+
+This document preserves earlier investigations and their results. It is not the
+current task list; some referenced engines and training scripts have since been
+removed. Use the [roadmap](roadmap.md) for current priorities and
+[release checks](release-checks.md) for outstanding live acceptance.
 
 Scope: polish the existing v0.2.0 assistant before adding features. Items below
 come from the current source, focused tests, and local reproductions.

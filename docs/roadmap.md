@@ -1,1499 +1,206 @@
-# RAPHAEL — Development Roadmap
-
-> **Goal:** Build RAPHAEL from a simple local voice assistant into a persistent, multi-provider, cross-platform AI assistant with skills, messaging, tone awareness, and eventually presence detection.
->
-> **Development rule:** Complete one feature completely before starting the next. Every sub-step should be implemented → tested → refined → committed.
-
----
-
-## 0. Project Foundation
-
-### 0.1 Repository
-
-```text
-RAPHAEL/
-├── README.md
-├── LICENSE
-├── .gitignore
-├── pyproject.toml
-└── src/
-    └── raphael/
-```
-
-### 0.2 Python Environment
-
-- [x] 0.2.1 Create Python virtual environment
-- [x] 0.2.2 Configure package/dependency management
-- [x] 0.2.3 Add formatting/linting
-- [x] 0.2.4 Add basic test framework
-- [x] 0.2.5 Create `python -m raphael` entry point
-
-### 0.3 Configuration
-
-- [x] 0.3.1 Create centralized configuration system
-- [x] 0.3.2 Load secrets from environment variables
-- [x] 0.3.3 Keep API keys and credentials out of Git
-
-Example:
-
-```text
-.env
-```
-
-```text
-NIM_API_KEY=
-OPENROUTER_API_KEY=
-GROQ_API_KEY=
-```
-
-### 0.4 Logging
-
-- [x] 0.4.1 Create structured logging
-- [x] 0.4.2 Add log levels
-- [x] 0.4.3 Log provider/router/audio events
-- [x] 0.4.4 Never log secrets or private data
-
-### 0.5 Git Workflow
-
-- [ ] 0.5.1 Commit each meaningful sub-step
-- [ ] 0.5.2 Write useful commit messages
-- [ ] 0.5.3 Tag stable milestones
-- [ ] 0.5.4 Commit at every completed checkbox where practical — frequent small commits build a stronger GitHub contribution graph than rare large ones
-- [ ] 0.5.5 Keep the repo public from day one so progress is visible
-
-Example:
-
-```bash
-git commit -m "feat: add linux microphone capture"
-git tag v0.1
-git push origin v0.1
-```
-
-### 0.6 Budget & Provider Strategy
-
-Starting broke, on the free tier — the whole provider layer (**1.4**) and router (**1.5**) are built around this from day one, not bolted on later.
-
-| Provider | Cost | Role |
-|---|---|---|
-| **NVIDIA NIM** | Free tier | Default provider, current starting point |
-| **OpenRouter** | Free-tier models + pay-as-you-go | Unified access to many models (OpenAI, Grok, etc.) without writing separate clients for each |
-| **Groq** | Free tier | Extremely fast inference — the "fast" side of the router |
-| **Ollama** (local) | Free, unlimited | Offline fallback, zero cost |
-| OpenAI / xAI (Grok) direct | Paid | Add later once budget allows, or reach them via OpenRouter |
-
-- [ ] 0.6.1 Default to free-tier providers (NIM, Groq, Ollama) while budget is tight
-- [ ] 0.6.2 Track token/request usage per provider to catch anything approaching a paid limit
-- [ ] 0.6.3 Treat Ollama as the zero-cost fallback of last resort, not the primary model
-
----
-
-## 1. Core AI
-
-The foundation of RAPHAEL.
-
-Final pipeline:
-
-```text
-🎤 Microphone
-      ↓
-  Wake Word
-      ↓
-      STT
-      ↓
-    Router
-      ↓
-      LLM
-      ↓
-      TTS
-      ↓
-🔊 Speaker
-```
-
----
-
-### 1.1 Audio Backend
-
-#### 1.1.1 Define Interface
-
-Create:
-
-```text
-platform/base.py
-```
-
-Define an abstraction such as:
-
-```text
-AudioBackend
-├── record()
-├── start_stream()
-├── stop_stream()
-└── list_devices()
-```
-
-#### 1.1.2 Linux Implementation
-
-Create:
-
-```text
-platform/linux.py
-```
-
-Use:
-
-- PipeWire/PulseAudio
-- `sounddevice`
-
-#### 1.1.3 Device Discovery
-
-- [x] List available microphones
-- [x] Select default device
-- [x] Allow manual device selection
-
-#### 1.1.4 Recording
-
-Implement:
-
-```text
-microphone → WAV
-```
-
-#### 1.1.5 Test
-
-- [x] Microphone works
-- [x] Correct sample rate
-- [x] Correct channels
-- [x] Recording is not clipped
-- [x] Recording is not silent
-- [x] Saved audio plays correctly
-
-#### 1.1.6 Refine
-
-- [x] Handle missing microphone
-- [x] Handle microphone disconnect
-- [x] Handle incorrect sample rate
-- [x] Handle permission errors
-- [x] Handle background noise
-- [x] Handle device switching
-
-**Checkpoint:** RAPHAEL can reliably record your voice.
-
----
-
-### 1.2 Wake Word
-
-RAPHAEL should remain idle until you say:
-
-> **"Raphael"**
-
-#### 1.2.1 Integration
-
-- [x] Integrate openWakeWord, or
-- [ ] Integrate Porcupine
-
-#### 1.2.2 Detection
-
-```text
-Listening...
-
-[Wake word detected]
-```
-
-- [x] Detect the wake word reliably
-
-#### 1.2.3 Connect to Recording
-
-```text
-Wake word
-    ↓
-Start recording
-```
-
-- [x] Wire wake detection to start recording
-
-#### 1.2.4 Cooldown Protection
-
-- [x] Add cooldown protection after a trigger
-
-#### 1.2.5 Refine
-
-- [x] Test in a quiet room
-- [x] Test with music playing
-- [x] Test with game audio
-- [x] Test with people talking
-- [x] Test at different distances
-- [x] Test at different speaking volumes
-- [x] Tune false positives and false negatives
-
----
-
-### 1.3 Speech-to-Text
-
-Use **faster-whisper**.
-
-#### 1.3.1 Setup
-
-- [x] Install and load the model
-
-#### 1.3.2 Conversion
-
-- [x] Convert audio → text
-
-#### 1.3.3 Pipeline Connection
-
-```text
-Wake word
-    ↓
-Record
-    ↓
-Whisper
-    ↓
-Text
-```
-
-- [x] Connect wake word → record → whisper → text
-
-#### 1.3.4 Silence Detection
-
-- [x] Add silence detection
-
-#### 1.3.5 Refine
-
-- [x] Test different accents
-- [x] Test fast speech
-- [x] Test quiet speech
-- [x] Test background noise
-- [x] Test gaming audio
-- [x] Test short commands
-- [x] Test long questions
-
-#### 1.3.6 Transcription Mode
-
-- [x] Start with batch transcription
-- [x] Only add streaming if latency becomes a real problem
-
-**Checkpoint:**
-
-```text
-You:
-"Raphael, what's my GPU temperature?"
-
-RAPHAEL:
-"what's my GPU temperature?"
-```
-
----
-
-### 1.4 AI Provider Layer
-
-Do not make `brain.py` directly depend on one provider. Cost profile for each is in **0.6**.
-
-Create:
-
-```text
-providers/
-├── base.py
-├── nim.py
-├── openrouter.py
-├── groq.py
-└── ollama.py
-```
-
-Common interface:
-
-```text
-LLMProvider
-├── send()
-├── stream()
-└── health_check()
-```
-
-#### 1.4.1 NVIDIA NIM
-
-- [x] Implement NIM client
-- [x] Send prompt
-- [x] Receive response
-- [x] Handle authentication
-
-#### 1.4.2 OpenRouter
-
-- [x] Implement OpenRouter client
-- [x] Support model selection
-- [x] Handle API errors
-
-#### 1.4.3 Groq
-
-- [x] Implement Groq client
-- [x] Support fast models
-- [x] Handle rate limits
-
-#### 1.4.4 Ollama
-
-- [x] Implement Ollama client
-- [x] Detect local availability
-- [x] Support offline fallback
-
-#### 1.4.5 Provider Manager
-
-Track provider state:
-
-```text
-NIM        → available
-Groq       → available
-OpenRouter → unavailable
-Ollama     → available
-```
-
-- [x] Track provider availability state
-
-#### 1.4.6 Failure Handling
-
-```text
-NIM
- ↓ failed
-Groq
- ↓ failed
-Ollama
- ↓
-response
-```
-
-- [x] Implement the NIM → Groq → Ollama fallback chain
-
-#### 1.4.7 Refine
-
-- [x] Timeouts
-- [x] Retries
-- [x] Exponential backoff
-- [x] Rate-limit handling
-- [x] Provider health state
-- [x] Clean error messages
-
----
-
-### 1.5 Model Router
-
-RAPHAEL decides which model/provider should handle a request.
-
-#### 1.5.1 Define Complexity
-
-Example:
-
-```text
-Simple:
-"What time is it?"
-
-Medium:
-"Explain how DNS works."
-
-Complex:
-"Analyze this Python architecture and redesign it."
-```
-
-- [x] Define simple/medium/complex examples for calibration
-
-#### 1.5.2 Create Router
-
-```text
-User request
-     ↓
-Complexity classifier
-     ↓
-┌───────────────┐
-│ simple        │ → fast model
-│ medium        │ → normal model
-│ complex       │ → strong model
-└───────────────┘
-```
-
-- [x] Build the complexity classifier
-- [x] Route simple → fast model, medium → normal model, complex → strong model
-
-#### 1.5.3 Manual Override
-
-- [x] Support internal overrides such as `/fast`, `/strong`, `/local`
-
-#### 1.5.4 Routing Logs
-
-Record:
-
-```text
-Request: "Explain this code"
-Complexity: complex
-Provider: NIM
-Model: <model>
-Reason: code analysis
-```
-
-- [x] Log request, complexity, provider, model, and reasoning for each routed call
-
-#### 1.5.5 Refine
-
-- [x] Measure latency
-- [x] Measure response quality
-- [x] Measure cost
-- [x] Measure failure rate
-- [x] Measure routing accuracy
-- [x] Optimize using real usage data
-
----
-
-### 1.6 Text-to-Speech
-
-Use **Piper** initially.
-
-#### 1.6.1 Setup
-
-- [x] Install Piper
-
-#### 1.6.2 Generation
-
-```text
-"text"
-   ↓
- Piper
-   ↓
- ".wav"
-```
-
-- [x] Generate speech from text via Piper
-
-#### 1.6.3 Playback
-
-- [x] Play responses automatically
-
-#### 1.6.4 Voice Selection
-
-- [x] Select RAPHAEL's voice
-
-#### 1.6.5 Tuning
-
-- [x] Tune speed
-- [x] Tune volume
-- [x] Tune pitch where supported
-- [x] Tune pauses
-
-#### 1.6.6 Streaming Refine
-
-```text
-AI response
-    ↓
-stream chunks
-    ↓
-TTS
-    ↓
-speaker
-```
-
-- [x] Stream response chunks to TTS instead of waiting for the full reply
-
-#### 1.6.7 Barge-In
-
-```text
-RAPHAEL:
-"The answer is—"
-
-You:
-"Raphael, stop."
-
-RAPHAEL:
-[Stops speaking]
-```
-
-- [x] Allow the user to interrupt RAPHAEL mid-speech
-
----
-
-### 1.7 Full Voice Loop
-
-Connect everything:
-
-```text
-┌──────────────────┐
-│   Microphone     │
-└────────┬─────────┘
-         ↓
-    Wake Word
-         ↓
-      Record
-         ↓
-      Whisper
-         ↓
-    Model Router
-         ↓
-    AI Provider
-         ↓
-      Response
-         ↓
-       Piper
-         ↓
-      Speaker
-```
-
-#### 1.7.1 Run
-
-- [x] Run the complete loop end-to-end
-
-#### 1.7.2 Context
-
-- [x] Add conversation context
-
-#### 1.7.3 Interruption
-
-- [x] Add interruption handling
-
-#### 1.7.4 Failure Recovery
-
-- [x] Add failure recovery
-
-#### 1.7.5 Stress Test
-
-- [x] Stress test extended sessions
-
-#### 1.7.6 Final Refinement
-
-- [x] Target low latency
-- [x] Reliable wake detection
-- [x] Clean transcription
-- [x] Stable AI responses
-- [x] Natural speech
-- [x] Graceful failures
-
----
-
-## v0.2 — Core AI Complete
-
-```bash
-git tag v0.2
-git push origin v0.2
-```
-
-RAPHAEL can now:
-
-```text
-Hear
- ↓
-Understand
- ↓
-Think
- ↓
-Speak
-```
-
----
-
-## 2. Memory
-
-Give RAPHAEL continuity across conversations and restarts.
-
-### 2.1 Memory Architecture
-
-Start with SQLite. Do not introduce a vector database until it is actually needed.
-
-- [x] 2.1.1 Design SQLite schema for `memories` and `conversation_turns`
-- [x] 2.1.2 Create `MemoryItem`, `MemoryType`, and `ConversationTurn` models
-- [x] 2.1.3 Implement `MemoryStore` persistence engine (WAL mode, connection pooling, thread-safe)
-- [x] 2.1.4 Implement CRUD and keyword search operations
-- [x] 2.1.5 Configure database path in centralized settings (`data/raphael.db`)
-- [x] 2.1.6 Unit tests for SQLite memory engine (CRUD, search, turn ordering)
-
----
-
-### 2.2 Short-Term Memory
-
-- [x] 2.2.1 Store the current conversation turns persistently in SQLite (`ConversationTurn`)
-- [x] 2.2.2 Pass relevant conversation to the model across sessions and restarts (`ConversationManager`)
-- [x] 2.2.3 Limit context size with sliding context window (`max_short_term_turns`)
-- [x] 2.2.4 Summarize older conversation when turns exceed threshold (`summarize_older_turns`)
-
----
-
-### 2.3 Long-Term Memory
-
-#### 2.3.1
-- [x] Store explicit `remember ...` commands and confirmed names, favorites, and project dates
-
-#### 2.3.2
-- [x] Propose conversational facts and corrections; save only after confirmation
-
-Example:
-
-> "My favorite game is CS2."
-
-RAPHAEL proposes:
-
-```text
-favorite game = CS2
-```
-
-Pending proposals expire after 60 seconds, restart, cancellation, or a topic change.
-In ambient mode, address RAPHAEL directly to confirm. Explicit `remember ...`
-commands save immediately; rejecting a proposal leaves existing facts unchanged.
-
-#### 2.3.3
-- [x] Retrieve relevant memories (ranked words and aliases; embedding recall remains future work)
-
-#### 2.3.4
-- [x] Inject relevant memories into context
-
-#### 2.3.5
-- [x] Handle conflicting memories for keyed names, favorites, and project dates
-
-Corrections update one current record and retain bounded revisions. Arbitrary
-unstructured notes still need explicit clarification when they conflict.
-
-Example:
-
-```text
-Old:
-favorite game = X
-
-New:
-favorite game = Y
-```
-
-#### 2.3.6
-- [x] Add memory deletion ("Forget that.")
-
-Deleted facts' known wording and values are suppressed in model context across
-restarts. Conversation archives remain stored; this is not full archive erasure.
-
----
-
-### 2.4 Restart Test
-
-Automated temporary-database tests cover fact restoration and correction after
-restart. The checklist below remains the live voice acceptance test.
-
-- [ ] Teach RAPHAEL a fact
-- [ ] Close RAPHAEL
-- [ ] Restart RAPHAEL
-- [ ] Ask about the fact
-- [ ] Confirm it remembers
-
----
-
-## v0.3 — Memory Complete
-
-Current development version: **0.3.6**. Persistent SQLite facts, corrections,
-deletion, restart recall, and background summaries are implemented. This version
-also connects streamed provider replies to sentence playback, preserves interrupted
-requests and playback context, and budgets CUDA STT quality retries during voice
-training. Runtime, package, and startup banner versions now agree.
-
-The live restart checklist above and microphone acceptance in
-[`release-checks.md`](release-checks.md) remain pending. Memory proposals in 2.3.2
-are implemented with acceptance/rejection and expiry. The version bump does not
-mark live checks complete or create a stable release tag. The first skills/actions
-are now implemented; v0.4 remains in progress.
-
-```bash
-git tag v0.3
-git push origin v0.3
-```
-
----
-
-## 3. Skills / Actions
-
-Give RAPHAEL the ability to perform actions.
-
-```text
-actions/
-├── open_app.py
-├── system_info.py
-├── web_search.py
-├── reminder.py
-└── ...
-```
-
----
-
-### 3.1 Skill Loader
-
-- [x] Discover trusted installed action modules exporting `ACTION` without core edits
-
-The action contract, validation, cooperative deadline, cancellation, and optional
-confirmation flow are documented in [`actions.md`](actions.md). These are local
-commands; model-selected function calling is still pending in 3.4.
-
----
-
-### 3.2 Core Skills
-
-#### 3.2.1 Open Applications
-- [x] Implement Linux application launching (Discord/Vesktop, Firefox, Chromium, Steam, VS Code)
-
-Uses an executable allowlist with no shell or spoken arguments. A launch request
-is acknowledged; window readiness still requires live desktop acceptance.
-
-#### 3.2.2 System Information
-- [x] Answer RAM usage, GPU temperature, and logical CPU core count locally
-
-Reuses the existing telemetry backend; unavailable metrics are reported honestly.
-
-#### 3.2.3 Web Search
-- [ ] Implement web search skill (e.g. "Search for the latest NVIDIA driver")
-
----
-
-### 3.3 Reminders
-
-- [ ] Support relative reminders ("Remind me in 30 minutes")
-- [ ] Support absolute reminders ("Remind me tomorrow at 8")
-- [ ] Support recurring reminders ("Remind me every Monday")
-
----
-
-### 3.4 Function Calling
-
-AI chooses:
-
-```text
-skill
-+
-arguments
-```
-
-Example:
-
-```json
-{
-  "skill": "open_app",
-  "app": "vesktop"
-}
-```
-
-- [ ] AI selects skill + arguments via function calling
-- [ ] RAPHAEL validates and executes the skill
-
----
-
-### 3.5 Safety
-
-- [x] Add action confirmation support, requiring explicit authorization and a fresh yes
-
-No destructive action ships yet. Actions declare whether they mutate state or
-require confirmation. Only trusted installed modules are discovered. Ambient
-follow-ups cannot launch applications or confirm side effects.
-
-Example:
-
-```text
-You:
-"Delete this file."
-
-RAPHAEL:
-"This permanently deletes X.
-Do you want me to continue?"
-```
-
----
-
-### 3.6 Refine
-
-- [x] Handle ambiguous requests
-- [x] Handle invalid arguments
-- [x] Handle unavailable applications
-- [x] Handle skill failures
-- [x] Handle timeouts
-- [x] Handle permissions
-- [ ] Validate an actual destructive action end-to-end before shipping one
-
-Automated checks cover local dispatch and failure handling. Deadlines are
-cooperative: handlers must bound blocking I/O and check cancellation before side
-effects. Real microphone, desktop launch, and speaker acceptance remain pending.
-
----
-
-## v0.4 — Skills Complete
-
-```bash
-git tag v0.4
-git push origin v0.4
-```
-
----
-
-## 4. Dashboard
-
-Give RAPHAEL a visual interface.
-
-Use:
-
-- FastAPI
-- WebSocket
-- HTML/CSS/JavaScript initially
-- TypeScript/React later if needed
-
-Example:
-
-```text
-┌───────────────────────────────────┐
-│             RAPHAEL               │
-│                                   │
-│             ● IDLE                │
-│                                   │
-│       ╭──────────────╮            │
-│       │  WAVEFORM    │            │
-│       ╰──────────────╯            │
-│                                   │
-│ User: What's using my GPU?        │
-│                                   │
-│ RAPHAEL: NVIDIA GPU is at 37%.   │
-│                                   │
-│ Provider: Groq                    │
-│ Model: ...                        │
-│ Latency: 0.8s                     │
-└───────────────────────────────────┘
-```
-
-### 4.1
-- [ ] Create the FastAPI server
-
-### 4.2
-- [ ] Create the WebSocket connection
-
-### 4.3
-- [ ] Display listening/idle state
-
-### 4.4
-- [ ] Display conversation history
-
-### 4.5
-- [ ] Add waveform visualization
-
-### 4.6
-- [ ] Display provider/model information
-
-### 4.7
-- [ ] Display router decisions
-
-### 4.8
-- [ ] Display errors and system status
-
-### 4.9
-- [ ] Perform a full UI/UX polish pass
-
----
-
-## v0.5 — Dashboard Complete
-
-```bash
-git tag v0.5
-git push origin v0.5
-```
-
----
-
-## 5. Messaging
-
-Make RAPHAEL available outside the microphone.
-
-```text
-Telegram ──┐
-Discord ───┼──→ RAPHAEL CORE
-Voice ─────┤
-Dashboard ─┘
-```
-
-All interfaces should use the same brain and memory.
-
----
-
-### 5.1 Telegram
-
-#### 5.1.1
-- [ ] Text message → RAPHAEL → reply
-
-#### 5.1.2
-- [ ] Voice message → STT → RAPHAEL → reply
-
-#### 5.1.3
-- [ ] Optional TTS voice reply
-
----
-
-### 5.2 Discord
-
-- [ ] Text message → RAPHAEL → reply
-- [ ] *(Later)* Discord voice
-- [ ] *(Later)* Channel restrictions
-- [ ] *(Later)* Permissions
-- [ ] *(Later)* Server-specific configuration
-
----
-
-### 5.3 Shared Memory
-
-Introduce channel/user identity:
-
-```text
-User
- ├── Voice
- ├── Telegram
- └── Discord
-```
-
-- [ ] Introduce channel/user identity so memory doesn't mix unrelated users
-
----
-
-### 5.4 Rate Limiting
-
-- [ ] Protect against spam
-- [ ] Protect against API exhaustion
-- [ ] Protect against loops
-- [ ] Protect against accidental runaway requests
-
----
-
-### 5.5 WhatsApp
-
-Keep this last — unofficial integrations can break.
-
-- [ ] *(Stretch)* Prototype a basic WhatsApp text bridge, only if still worth maintaining
-
----
-
-## v0.6 — Messaging Complete
-
-```bash
-git tag v0.6
-git push origin v0.6
-```
-
----
-
-## 6. Mood / Tone
-
-Teach RAPHAEL to pay attention to how something is said, not just what was said.
-
----
-
-### 6.1 Audio Features
-
-- [ ] Extract pitch
-- [ ] Extract energy
-- [ ] Extract speech rate
-- [ ] Extract pauses
-- [ ] Extract volume
-
----
-
-### 6.2 Tone Classifier
-
-Potential output:
-
-```text
-neutral
-excited
-frustrated
-sad
-calm
-```
-
-- [ ] Build/integrate a tone classifier
-- [ ] Treat outputs as estimates, not facts
-
----
-
-### 6.3 Context Integration
-
-Instead of:
-
-```text
-User mood = angry
-```
-
-Prefer:
-
-```text
-Possible tone:
-frustrated
-
-Confidence:
-0.72
-```
-
-- [ ] Pass tone as a confidence estimate, not a hard label
-- [ ] Let the LLM decide whether the signal is useful
-
----
-
-### 6.4 Refine
-
-- [ ] Test different microphones
-- [ ] Test background noise
-- [ ] Test different speakers
-- [ ] Test different speaking speeds
-- [ ] Test sarcasm
-- [ ] Test gaming environments
-- [ ] Avoid overreacting to every small change in voice
-
----
-
-## v0.7 — Tone Complete
-
-```bash
-git tag v0.7
-git push origin v0.7
-```
-
----
-
-## 7. System Integration + Windows
-
-Make RAPHAEL feel like a real desktop application.
-
----
-
-### 7.1 Linux Service
-
-- [ ] Create `raphael.service`
-- [ ] Start RAPHAEL automatically with systemd
-
----
-
-### 7.2 Notifications
-
-- [ ] Support Linux notifications
-- [ ] Support Windows notifications
-- [ ] Use a platform abstraction rather than hardcoding Linux behavior into the core
-
----
-
-### 7.3 Global Hotkey
-
-Example: `SUPER + R`
-
-- [ ] Add a manual trigger hotkey — useful when wake word fails, the room is noisy, or you don't want to rely on it
-
----
-
-### 7.4 Windows Backend
-
-Implement `platform/windows.py`:
-
-- [ ] Handle microphone
-- [ ] Handle audio playback
-- [ ] Handle notifications
-- [ ] Handle startup
-- [ ] Handle application launching
-- [ ] Handle hotkeys
-
----
-
-### 7.5 Windows Parity
-
-- [ ] Test wake word on Windows
-- [ ] Test STT on Windows
-- [ ] Test AI/router on Windows
-- [ ] Test TTS on Windows
-- [ ] Test memory on Windows
-- [ ] Test skills on Windows
-- [ ] Test dashboard on Windows
-- [ ] Test messaging on Windows
-
----
-
-## v0.8 — Cross-Platform Complete
-
-```bash
-git tag v0.8
-git push origin v0.8
-```
-
----
-
-## 8. Proactive Intelligence + Presence
-
-Make RAPHAEL capable of reacting to events instead of only waiting for commands.
-
----
-
-### 8.1 Webcam
-
-Start simple — do not immediately implement face recognition.
-
-- [ ] Detect "nobody" vs. "presence"
-- [ ] Detect motion
-
----
-
-### 8.2 Event Engine
-
-Build a general trigger system:
-
-```text
-Event
- ↓
-Trigger
- ↓
-Condition
- ↓
-Action
-```
-
-Potential event sources:
-
-```text
-Time
-Presence
-Motion
-Application state
-Message
-System event
-```
-
-- [ ] Build the Event → Trigger → Condition → Action engine
-
----
-
-### 8.3 First Presence Feature
-
-```text
-Nobody detected
-
-        ↓
-
-Person enters room
-
-        ↓
-
-RAPHAEL
-
-"Welcome back."
-```
-
-- [ ] Implement a simple "welcome back" greeting on room entry
-
----
-
-### 8.4 Presence-Based Reminders
-
-Example:
-
-> "When I get back to my desk, remind me to finish RAPHAEL."
-
-```text
-Presence detected
-       ↓
-Check reminders
-       ↓
-Matching reminder
-       ↓
-RAPHAEL speaks
-```
-
-- [ ] Extend reminders to support presence-based triggers, not just time-based ones
-
----
-
-### 8.5 Quiet Hours / DND
-
-- [ ] Support Do Not Disturb
-- [ ] Support quiet hours
-- [ ] Support disabling camera triggers
-- [ ] Support disabling voice notifications
-
----
-
-### 8.6 False-Trigger Protection
-
-Avoid triggering from:
-
-- [ ] Shadows
-- [ ] Pets
-- [ ] Monitor changes
-- [ ] Camera noise
-- [ ] Random movement
-- [ ] Use confidence thresholds and cooldowns
-
----
-
-### 8.7 Optional WhatsApp Completion
-
-- [ ] *(Stretch)* Finish WhatsApp integration, only if still desired
-
----
-
-## v0.9 — Presence Complete
-
-```bash
-git tag v0.9
-git push origin v0.9
-```
-
----
-
-## Final Integration & Polish
-
-Before tagging v1.0, do one pass across the whole system rather than each feature in isolation:
-
-- [ ] Run the full pipeline end-to-end with every feature active at once (voice, memory, skills, messaging, tone, presence)
-- [ ] Re-test Windows parity now that every feature is in
-- [ ] Review logs for silent failures across providers
-- [ ] Clean up dead code / unused config left over from earlier iterations
-- [ ] Update README with final architecture, feature list, and a demo clip
-
----
-
-## v1.0 — RAPHAEL Complete
-
-```bash
-git tag v1.0
-git push origin v1.0
-```
-
-At this point RAPHAEL is a personal desktop assistant platform rather than just a chatbot with a microphone.
-
----
-
-## Final Architecture
-
-```text
-RAPHAEL/
-│
-├── README.md
-├── LICENSE
-├── .gitignore
-├── pyproject.toml
-│
-├── src/
-│   └── raphael/
-│       │
-│       ├── core/
-│       │   ├── brain.py
-│       │   ├── router.py
-│       │   ├── memory.py
-│       │   ├── context.py
-│       │   └── events.py
-│       │
-│       ├── audio/
-│       │   ├── wakeword.py
-│       │   ├── stt.py
-│       │   └── tts.py
-│       │
-│       ├── providers/
-│       │   ├── base.py
-│       │   ├── nim.py
-│       │   ├── openrouter.py
-│       │   ├── groq.py
-│       │   └── ollama.py
-│       │
-│       ├── actions/
-│       │   ├── open_app.py
-│       │   ├── system_info.py
-│       │   ├── web_search.py
-│       │   └── reminder.py
-│       │
-│       ├── platform/
-│       │   ├── base.py
-│       │   ├── linux.py
-│       │   └── windows.py
-│       │
-│       ├── integrations/
-│       │   ├── telegram.py
-│       │   ├── discord.py
-│       │   └── whatsapp.py
-│       │
-│       ├── presence/
-│       │   ├── camera.py
-│       │   └── detection.py
-│       │
-│       └── server/
-│           ├── api.py
-│           └── websocket.py
-│
-├── web/
-│   └── dashboard/
-│
-├── tests/
-│
-├── scripts/
-│
-└── docs/
-    └── roadmap.md
-```
-
----
-
-## Language Strategy
-
-Use **Python as the primary language**.
-
-Python handles:
-
-- AI orchestration
-- Audio processing
-- Whisper
-- TTS
-- Memory
-- Provider APIs
-- Skills
-- Automation
-- Webcam processing
-- System integration
-
-For the dashboard, add TypeScript/React later if a more advanced frontend is needed:
-
-```text
-Python
-   ↓
-RAPHAEL Core
-   ↓
-FastAPI
-   ↓
-WebSocket
-   ↓
-TypeScript/React Dashboard
-```
-
-Do not make RAPHAEL a Python/Node hybrid from day one.
-
----
-
-## GitHub Growth Strategy
-
-RAPHAEL is also meant to build up your GitHub profile, not just work as software:
-
-- [ ] Commit at each completed sub-step where practical, not just at each version tag — frequent small commits build a stronger contribution graph than rare large ones
-- [ ] Keep the repo public from day one
-- [ ] Update the README at each version tag, with a short changelog and (once there's something to see) a demo gif or clip
-- [ ] Use this roadmap file itself (`docs/roadmap.md`) as a live checklist — checked-off boxes double as a visible changelog for anyone browsing the repo
-- [ ] Consider a short devlog (issues, discussions, or a `CHANGELOG.md`) noting what changed at each tag — extra visible activity beyond just commits
-
----
-
-## Version Milestones
-
-| Version | Capability |
-| --- | --- |
-| `v0.1` | 🧱 Project foundation |
-| `v0.2` | 🎙️ Wake → STT → Router → AI → TTS |
-| `v0.3` | 🧠 Persistent memory |
-| `v0.4` | 🖐️ Skills and actions |
-| `v0.5` | 🖥️ Web dashboard |
-| `v0.6` | 💬 Telegram + Discord |
-| `v0.7` | 🎭 Voice tone awareness |
-| `v0.8` | 🪟 Windows + desktop integration |
-| `v0.9` | 👁️ Presence detection |
-| `v1.0` | ✅ Fully integrated, polished, proactive assistant |
-
----
-
-## Development Philosophy
-
-> **Don't build JARVIS all at once. Build one reliable component at a time.**
-
-Start with:
-
-```text
-Microphone
-   ↓
-Record WAV
-```
-
-Then:
-
-```text
-Microphone
-   ↓
-Wake word
-   ↓
-Record
-```
-
-Then:
-
-```text
-Wake word
-   ↓
-Record
-   ↓
-Whisper
-```
-
-Then:
-
-```text
-Wake word
-   ↓
-Whisper
-   ↓
-AI
-```
-
-Then:
-
-```text
-Wake word
-   ↓
-Whisper
-   ↓
-AI
-   ↓
-Piper
-```
-
-Then:
-
-```text
-🎤 → RAPHAEL → 🔊
-```
-
-**That is the first real milestone.**
-
----
-
-## RAPHAEL Long-Term Architecture
-
-```text
-                 ┌─────────────┐
-                 │   Voice     │
-                 └──────┬──────┘
-                        │
-┌─────────────┐         │        ┌─────────────┐
-│  Telegram   │─────────┤        │   Discord   │
-└─────────────┘         │        └─────────────┘
-                        ↓
-               ┌─────────────────┐
-               │     RAPHAEL     │
-               │                 │
-               │ Brain           │
-               │ Memory          │
-               │ Router          │
-               │ Skills          │
-               │ Events          │
-               └───────┬─────────┘
-                       │
-          ┌────────────┼────────────┐
-          ↓            ↓            ↓
-       NIM          Groq       OpenRouter
-          │
-          ↓
-       Ollama
-   (local fallback)
-
-                       │
-              ┌────────┴────────┐
-              ↓                 ↓
-          Dashboard          Speaker
-                                │
-                              🔊
-
-                       Future
-                          ↓
-                     ┌─────────┐
-                     │ Webcam  │
-                     └────┬────┘
-                          ↓
-                      Presence
-                          ↓
-                       Events
-                          ↓
-                       Skills
-```
-
-**RAPHAEL starts as a voice pipeline and gradually becomes the assistant.**
+# RAPHAEL development roadmap
+
+Last reviewed: **2026-10-08**. Package version: **0.3.6 development**.
+
+The goal is a reliable personal desktop assistant with natural voice conversation,
+persistent memory, useful actions, and eventually remote messaging and presence.
+Linux is the current target. Build one feature at a time and verify its behavior
+before treating it as ready for everyday use.
+
+## Current status
+
+| Area | Implemented | Still pending |
+| --- | --- | --- |
+| Voice loop | Wake recognition, local STT, provider streaming, sentence playback, interruptions, captions | Live microphone/speaker acceptance of the current combined changes |
+| Voices | Default Piper/Amy; optional custom Turbo and local Piper fallback | Reproducible custom-voice installation and private asset import on a fresh machine |
+| Providers | NIM, Groq, OpenRouter, Ollama, routing, retries/fallback, latency tracing | Usage totals, budget controls, broader live fallback verification |
+| Memory | SQLite conversations, summaries, confirmed facts, corrections, forgetting, automated restart recall | Live voice-based restart acceptance |
+| Actions | Trusted module discovery, validation, local telemetry, allowlisted Linux app launching | Model-selected calls, web search, reminders, live desktop launch acceptance |
+| Personality | Editable preferences, curiosity, voice-requested style updates/reset | Continued evaluation during real conversations |
+| Setup | Amy/custom voice choice, device/key configuration, missing-asset reporting | Automatic Turbo environment/model setup and clean-machine end-to-end validation |
+| Dashboard, messaging, tone, Windows, presence | Planned | Implementation |
+
+A checked item below means the implementation exists. It does not establish
+microphone accuracy, speaker quality, or a completed release. Historical evidence
+is in [release checks](release-checks.md), [latency findings](conversation-latency.md),
+and the [changelog](../CHANGELOG.md). The repository has a `v0.2` tag; no stable
+`v0.3` tag is recorded yet.
+
+## Next work, in order
+
+1. **Validate the current desktop build.** Run the live wake, conversation,
+   interruption, custom-voice, memory restart, and Discord launch checks.
+   Confirm the shorter 0.9-second endpoint does not cut off normal speech.
+2. **Finish installation reproducibility.** Keep Amy as the simple default;
+   install Turbo separately, import the user's private voice assets, and prove
+   that the selected voice works after a fresh setup and restart.
+3. **Add model-selected actions.** Let the provider select an existing action
+   with structured arguments, while keeping local validation, authorization,
+   cancellation, deadlines, and honest execution results.
+4. **Add persistent reminders.** Start with relative reminders, list/cancel,
+   restart recovery, and delivery; then add absolute times and recurrence.
+5. **Add web search with sources.** Return current information with references,
+   bounded requests, and clear handling of unavailable search.
+
+The broader milestones below remain the plan. New priority choices should update
+this section rather than silently marking later milestones complete.
+
+## Foundation and core voice — v0.1 / v0.2
+
+- [x] Python `src/` package, CLI, centralized settings, secrets handling, logging.
+- [x] Linux audio device discovery, recording, playback, and error handling.
+- [x] Whisper keyword spotting and optional openWakeWord integration.
+- [x] Local faster-whisper transcription, VAD, confidence checks, bounded retries.
+- [x] NIM, Groq, OpenRouter, and Ollama provider clients.
+- [x] Heuristic request routing and `/fast`, `/strong`, `/deep`, `/local` overrides.
+- [x] Time/date answers without an AI request.
+- [x] Provider fallback before visible output; no splicing after a partial answer.
+- [x] Piper speech, persistent Turbo worker, bounded sentence queues and interruption.
+- [x] Playback captions; native Piper timing with duration estimates when unavailable.
+- [x] Foreground voice requests take priority over background summaries.
+- [x] Concise normal console and explicit development diagnostics.
+- [x] Stage-level latency instrumentation and recorded model comparisons.
+- [ ] Repeat live acceptance on the current combined build, including PC noise and pauses.
+- [ ] Record sustained-session behavior and real provider-failure recovery.
+- [ ] Track request/token totals and configurable provider budget limits.
+
+Keep provider costs configurable; hosted free tiers and model availability can
+change. Ollama requires a separately installed server/model and is not guaranteed
+to be available just because the client is configured.
+
+## Memory and conversation — v0.3, in development
+
+- [x] SQLite conversations, durable facts, metadata, and keyed revisions.
+- [x] Bounded short-term context and incremental background summaries across restarts.
+- [x] Explicit `remember ...` and targeted `forget ...` commands.
+- [x] Confirmation before conversational facts or corrections are saved.
+- [x] Proposal cancellation on rejection, unrelated requests, expiry, or restart.
+- [x] Ranked word/alias recall and local answers for supported saved facts.
+- [x] Suppress known forgotten wording from model context; retain archived chat separately.
+- [x] Automated restart, correction, and memory isolation tests.
+- [x] Editable personality file and managed style updates/reset by voice.
+- [x] Optional ambient follow-ups with intended-listener classification.
+- [x] Linked interruption fragments and estimated playback context for continuation.
+- [x] Keep internal interruption status out of spoken dialogue and provider reply examples.
+- [ ] Teach a fact by voice, confirm it, restart, and recall it on the target desktop.
+- [ ] Verify rejection and forgetting behavior through the actual microphone.
+- [ ] Test the five-minute active ambient window and later context-gated follow-ups
+      against speech addressed to other people.
+- [ ] Finish [release acceptance](release-checks.md) before tagging stable v0.3.
+
+Memory recall uses words and aliases, not embeddings. Forgetting is not full chat
+archive erasure. Ambient classification estimates the intended listener; it does
+not identify speakers. Those limitations remain explicit in the product docs.
+
+## Installation and custom voice
+
+- [x] Setup menu: RAPHAEL custom Turbo voice or default Amy/Piper.
+- [x] Preserve existing settings and selected audio devices during setup.
+- [x] CPU/Amy example configuration and installer pre-downloads.
+- [x] Report missing custom reference, model files, or inference environment.
+- [x] Download the exact Turbo model revision expected by the runtime.
+- [x] Keep private references, recordings, weights, environments, and databases out of Git.
+- [ ] Create the separate Python 3.12 Turbo environment automatically when selected.
+- [ ] Add private reference import/backup with validation and actionable recovery steps.
+- [ ] Validate a fresh machine with Amy, then the custom voice and fallback.
+- [ ] Package or resolve the worker and voice manifest for custom Turbo use outside
+      a source checkout; a wheel alone currently does not include those assets.
+- [ ] Reduce optional inference dependencies after measuring what the worker actually needs.
+
+The existing custom voice needs its original reference audio/transcript. A Git clone
+contains the manifest, not those assets. The heavier Turbo installation should remain
+optional. See [custom voice requirements](chatterbox-turbo-integration.md).
+
+## Skills and actions — v0.4
+
+- [x] Discover trusted installed modules exporting `ACTION` without editing the dispatcher.
+- [x] Validate action names and arguments; reject ambiguous requests.
+- [x] Enforce direct-address authorization for ambient side effects.
+- [x] Support confirmation tied to exact arguments, expiry, and cancellation.
+- [x] Bound blocking work with cooperative deadlines and report failures locally.
+- [x] Read RAM usage, GPU temperature, and logical CPU core count.
+- [x] Launch Discord/Vesktop, Firefox, Chromium, Steam, and VS Code/VSCodium by allowlist.
+- [x] Recognize polite app requests, exact spelling corrections, and short-lived app references.
+- [ ] Observe actual window opening and missing-app behavior on the target desktop.
+- [ ] Accept model-selected calls through the same validated action registry.
+- [ ] Return tool results to the provider without treating generated text as execution proof.
+- [ ] Add relative reminders, persistence, listing, cancellation, and restart recovery.
+- [ ] Add timezone-aware absolute reminders and recurring reminders.
+- [ ] Add web search, source links, timeouts, and failure handling.
+- [ ] Test end-to-end action chaining only after single actions are reliable.
+
+No destructive action ships today. Test explicit confirmation end-to-end before
+adding one. Action modules are trusted Python code, not sandboxed third-party plugins.
+The interface and existing behavior are documented in [actions.md](actions.md).
+
+## Dashboard — v0.5
+
+- [ ] Add a local server and live status connection.
+- [ ] Show idle/listening/thinking/speaking state, selected provider/model, and errors.
+- [ ] Display conversation history, routing decisions, and measured response stages.
+- [ ] Add useful settings controls and audio visualization.
+- [ ] Review access controls before exposing the dashboard beyond localhost.
+- [ ] Complete UI and accessibility checks against real desktop use.
+
+Start with FastAPI, WebSocket, and a small web frontend. Add React/TypeScript if
+needed; the Python assistant should not depend on an unnecessary second runtime.
+
+## Messaging — v0.6
+
+- [ ] Telegram text request/reply.
+- [ ] Telegram voice input and optional spoken output.
+- [ ] Discord text request/reply, permissions, and channel restrictions.
+- [ ] Separate channel/user identity before sharing conversation memory.
+- [ ] Rate limits, request budgets, and loop prevention.
+- [ ] Consider Discord voice after text messaging is stable.
+- [ ] Reassess WhatsApp as an optional extension, based on maintenance cost.
+
+Opening the Discord desktop app is already implemented; a Discord messaging bot is not.
+
+## Voice tone awareness — v0.7
+
+- [ ] Extract pitch, energy, speech rate, pauses, and volume.
+- [ ] Estimate tone with confidence rather than assigning a definitive emotional state.
+- [ ] Supply useful estimates to conversation generation without overreacting.
+- [ ] Evaluate across speakers, microphones, noise, sarcasm, and gaming audio.
+
+Turbo's optional vocal event markers and conversational personality are existing
+features; they are not an acoustic mood classifier.
+
+## Desktop integration and Windows — v0.8
+
+- [ ] Linux user service and optional autostart.
+- [ ] Desktop notifications through a platform abstraction.
+- [ ] Manual activation hotkey for noisy rooms or missed wake phrases.
+- [ ] Windows audio, notifications, startup, launching, and hotkeys.
+- [ ] Validate Windows parity for voice, memory, actions, and later integrations.
+
+## Presence and proactive behavior — v0.9
+
+- [ ] Optional webcam presence/motion detection.
+- [ ] Event → trigger → condition → action execution.
+- [ ] A bounded welcome-back greeting after room entry.
+- [ ] Presence-triggered reminders.
+- [ ] Quiet hours, Do Not Disturb, and independent camera/voice notification controls.
+- [ ] Confidence thresholds and cooldowns tested against shadows, pets, screens, and noise.
+
+## Integration and release — v1.0
+
+- [ ] Exercise the combined voice, memory, actions, messaging, tone, and presence system.
+- [ ] Repeat supported-platform acceptance and long-session failure recovery.
+- [ ] Verify clean installation, upgrade, private-data backup, and uninstall behavior.
+- [ ] Audit unused configuration/dependencies and misleading capability claims.
+- [ ] Update user docs, changelog, and a demo with actually observed behavior.
+- [ ] Tag releases only after their automated checks and live acceptance are complete.
+
+## Working rules
+
+- Keep commits focused and describe behavior and validation, not just file changes.
+- Work on and push to `main` for this repository unless the user requests a branch.
+  Fetch first and preserve remote changes; never force-push to resolve divergence.
+- Keep models, API keys, recordings, transcripts, and conversation databases local.
+- Record benchmark conditions and dates. Old measurements are evidence about that
+  run, not guarantees for current models, hardware, or configuration.
+- Keep automated tests distinct from real microphone, GPU, speaker, and desktop checks.
+- Update this checklist when functionality changes; preserve detailed historical
+  results in release notes rather than accumulating contradictory current claims.

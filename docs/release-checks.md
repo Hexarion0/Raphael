@@ -129,6 +129,30 @@ Run these checks on the target desktop after starting `raphael start`:
 pending; the user deferred these checks until later. Automated callback tests use mocked audio and mocked launches. This
 status must only change after the real desktop checks have been observed.
 
+## Recorded validation — 2026-10-08 (setup, documentation, and spoken status notes)
+
+- 662 unit tests passed; three integrations were excluded. Ruff, shell syntax,
+  whitespace checks, and all 27 local documentation links passed.
+- The user reported hearing “Playback was interrupted” aloud. Callback tests
+  reproduced a provider returning the internal marker as a spoken answer.
+  Archived assistant status annotations now enter provider context as separate
+  playback metadata; streamed and batch output suppress the exact markers.
+  Tests cover every marker chunk boundary, mixed answers, marker-only replies,
+  direct TTS cleanup, restart context, and summary inputs.
+- Turbo model downloads now request the revision accepted by the worker and
+  refresh incompatible cached inventories. Download tests use a mocked hub;
+  no model download or live provider request was needed for validation.
+- Fresh-install example settings use CPU transcription and Amy. The installer
+  installs runtime dependencies from package metadata and checks Python version
+  plus both Amy model/config files. Setup preserves the user's existing settings.
+- The wheel built and installed to an isolated target outside the checkout.
+  Installed-package import, CLI help/version, and the status filter passed using
+  the existing environment's dependencies. This is not a clean dependency install.
+- README and roadmap now reflect current defaults and distinguish implemented
+  features, custom assets absent from Git, historical measurements, and pending
+  live acceptance. Restart RAPHAEL and retest interruption/continuation on the
+  actual microphone and speaker; no live playback acceptance was performed here.
+
 ## Recorded validation — 2026-10-08 (Discord request routing)
 
 - 642 unit tests passed, with three integrations excluded. Ruff and whitespace

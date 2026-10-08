@@ -1,5 +1,53 @@
 # Chatterbox Turbo RAPHAEL voice
 
+## Setup requirements
+
+The default installer uses Amy/Piper on CPU. Choose **1: RAPHAEL custom voice** in
+`raphael setup` to configure Turbo. The choice checks existing assets and saves
+configuration; it does not download the model or create the inference environment.
+This integration currently requires a source checkout and an NVIDIA CUDA GPU.
+
+Required local assets:
+
+| Asset | Default path | Included in Git? |
+| --- | --- | --- |
+| Voice manifest | `voice_profiles/raphael/voice.json` | Yes |
+| Turbo worker | `scripts/chatterbox_turbo_worker.py` | Yes |
+| Inference environment | `data/voice/envs/clone/` | No |
+| Pinned model | `data/voice/models/chatterbox-turbo/` | No |
+| Reference audio | `data/voice/references/raphael/reference-1.wav` | No |
+| Reference transcript | `data/voice/references/raphael/reference-1.txt` | No |
+| Optional custom Piper fallback | `models/tts/en_US-raphael-medium.onnx` and `.onnx.json` | No |
+
+For a manual setup, from the checkout root with Python 3.12 installed:
+
+```bash
+python3.12 -m venv data/voice/envs/clone
+data/voice/envs/clone/bin/python -m pip install -r scripts/voice_requirements/clone.txt
+data/voice/envs/clone/bin/python scripts/fetch_voice_model.py chatterbox-turbo --inventory-only
+data/voice/envs/clone/bin/python scripts/fetch_voice_model.py chatterbox-turbo
+```
+
+The downloader requests the pinned production revision, including when replacing
+a cached inventory for a different revision. The full model is about 2.8 GiB;
+the installed inference environment measured about 6 GiB on the development PC.
+Download sizes and installation footprints can differ across machines.
+
+Restore your private reference WAV and matching transcript to the paths above
+from a separate backup. The downloader supplies model weights, not the original
+RAPHAEL voice reference. Copy the custom Piper model/config separately if you want
+that fallback too; `bash setup.sh` pre-downloads Amy as the standard fallback.
+Then run `.venv/bin/raphael setup`, choose **1**, and check actual playback.
+Environment/model locations can be overridden with `TTS_CHATTERBOX_PYTHON`,
+`TTS_CHATTERBOX_MODEL`, and `TTS_VOICE_PROFILES`.
+
+The requirements file records the tested environment. A fully automated,
+clean-machine custom install remains a roadmap item; file presence checks do not
+prove CUDA compatibility or synthesis quality. A wheel-only installation currently
+omits the standalone worker and manifest, so use the source checkout for Turbo.
+
+## Runtime
+
 RAPHAEL can use the pinned local Chatterbox Turbo checkpoint with the selected primary
 reference. The production request path is:
 
