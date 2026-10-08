@@ -7,6 +7,8 @@ import fnmatch
 import json
 from pathlib import Path
 
+TURBO_REVISION = "749d1c1a46eb10492095d68fbcf55691ccf137cd"
+
 CANDIDATES = {
     "chatterbox-turbo": (
         "ResembleAI/chatterbox-turbo",
@@ -36,10 +38,11 @@ def main() -> None:
     directory = args.root / args.candidate
     directory.mkdir(parents=True, exist_ok=True)
     inventory_path = directory / "inventory.json"
+    inventory = {}
     if inventory_path.exists():
         inventory = json.loads(inventory_path.read_text())
-    else:
-        info = HfApi().model_info(repo, files_metadata=True)
+    if inventory.get("repository") != repo or inventory.get("revision") != TURBO_REVISION:
+        info = HfApi().model_info(repo, revision=TURBO_REVISION, files_metadata=True)
         files = [
             {"path": s.rfilename, "bytes": s.size or 0}
             for s in info.siblings
@@ -57,8 +60,6 @@ def main() -> None:
         return
     files = inventory["files"]
     if args.analysis_only:
-        if args.candidate not in {"chatterbox-turbo", "chatterbox-nano"}:
-            parser.error("--analysis-only is available only for Chatterbox's speaker encoder")
         files = [f for f in files if f["path"] == "ve.safetensors"]
     if sum(f["bytes"] for f in files) > args.max_bytes:
         parser.error(

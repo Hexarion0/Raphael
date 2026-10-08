@@ -1,6 +1,7 @@
 """Tests for centralized configuration and secret handling."""
 
 import os
+from pathlib import Path
 from unittest.mock import patch
 
 from raphael.config import Settings
@@ -19,6 +20,18 @@ def test_default_settings():
     assert settings.audio.wake_word == "raphael"
     assert settings.audio.sample_rate == 16000
     assert settings.providers.nim_api_key is None
+
+
+def test_example_configuration_starts_with_cpu_amy():
+    example = Path(__file__).resolve().parents[1] / ".env.example"
+    with patch.dict(os.environ, {}, clear=True):
+        settings = Settings(_env_file=example)
+    audio = settings.audio
+    assert (audio.tts_engine, audio.tts_voice) == ("piper", "en_US-amy-medium")
+    assert (audio.stt_model, audio.stt_device, audio.stt_compute_type) == ("base.en", "cpu", "int8")
+    assert not audio.ambient_listening and not audio.show_transcripts
+    assert audio.barge_in_mode == "wake"
+    assert not audio.stt_retry_model
 
 
 def test_environment_override():

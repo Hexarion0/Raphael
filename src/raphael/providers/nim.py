@@ -7,7 +7,7 @@ from typing import Any
 
 import httpx
 
-from raphael.config import get_settings
+from raphael.config import ProviderConfig, get_settings
 from raphael.latency import http_extensions, mark
 from raphael.logging import get_logger
 from raphael.providers.base import ChatMessage, LLMProvider, LLMResponse, LLMStreamChunk
@@ -21,7 +21,7 @@ class NimProvider(LLMProvider):
     """Client for NVIDIA NIM (Inference Microservice) Cloud API."""
 
     name: str = "nim"
-    default_model: str = "nvidia/nemotron-3.5-lightning-30b-a3b"
+    default_model: str = ProviderConfig().nim_model
     base_url: str = "https://integrate.api.nvidia.com/v1"
 
     def __init__(

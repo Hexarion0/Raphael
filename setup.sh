@@ -35,6 +35,10 @@ fi
 
 PY_VER=$($PYTHON_CMD -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
 echo -e "   Found Python ${GREEN}v$PY_VER${NC} ($($PYTHON_CMD --version))"
+if ! "$PYTHON_CMD" -c 'import sys; sys.exit(sys.version_info < (3, 10))'; then
+    echo -e "${RED}Python 3.10 or newer is required.${NC}"
+    exit 1
+fi
 
 # 2. Setup Virtual Environment
 echo -e "\n${BOLD}[2/5] Setting up virtual environment (.venv)...${NC}"
@@ -52,20 +56,20 @@ echo -e "   Active Python: ${GREEN}$(which python)${NC}"
 # 3. Install Dependencies
 echo -e "\n${BOLD}[3/5] Installing dependencies and packages...${NC}"
 pip install --upgrade pip --quiet
-pip install -r requirements.txt
-pip install -e . --no-deps --quiet
+pip install -e .
 echo -e "   ${GREEN}✅ Dependencies successfully installed.${NC}"
 
 # 4. Pre-download Default Models (Whisper STT & Piper TTS)
 echo -e "\n${BOLD}[4/5] Pre-downloading voice and AI models...${NC}"
 python -c "
 from pathlib import Path
-import os
 print('   Checking Piper TTS voice model...')
 from piper.download_voices import download_voice
 tts_dir = Path('models/tts')
 tts_dir.mkdir(parents=True, exist_ok=True)
-if not (tts_dir / 'en_US-amy-medium.onnx').is_file():
+if not all((tts_dir / name).is_file() for name in (
+    'en_US-amy-medium.onnx', 'en_US-amy-medium.onnx.json'
+)):
     print('   Downloading default Amy voice model (~60MB)...')
     download_voice('en_US-amy-medium', tts_dir)
 print('   Piper voice ready.')

@@ -6,7 +6,7 @@ from pathlib import Path
 from dotenv import dotenv_values, set_key, unset_key
 
 from raphael.audio.tts import TextToSpeech, resolve_tts_engine
-from raphael.config import AudioConfig, get_settings
+from raphael.config import AudioConfig, ProviderConfig, get_settings
 from raphael.logging import get_logger
 from raphael.platform import get_audio_backend
 
@@ -158,7 +158,7 @@ def run_setup_wizard() -> None:
     defaults = {
         "RAPHAEL_ENV": "development",
         "RAPHAEL_LOG_LEVEL": "INFO",
-        "NIM_MODEL": "nvidia/nemotron-3-super-120b-a12b",
+        "NIM_MODEL": ProviderConfig().nim_model,
         "OLLAMA_HOST": "http://localhost:11434",
         "WAKE_WORD": "hey raphael",
         "WAKE_THRESHOLD": "0.5",
