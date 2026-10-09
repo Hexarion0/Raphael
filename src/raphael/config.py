@@ -145,6 +145,10 @@ class AudioConfig(BaseModel):
     tts_chatterbox_python: str = Field(default="data/voice/envs/clone/bin/python")
     tts_min_free_vram_mb: int = Field(default=3000, ge=0, le=6144)
     tts_audio_queue_size: int = Field(default=2, ge=1, le=4)
+    tts_playback_latency: float = Field(
+        default=0.12, gt=0, le=1,
+        description="Output buffer latency in seconds to tolerate audio scheduling delays",
+    )
     tts_speed: float = Field(
         default=1.0,
         description="Speech synthesis speed multiplier (1.0 = normal)",
@@ -238,6 +242,7 @@ class Settings(BaseSettings):
     tts_chatterbox_python: str = Field(default="data/voice/envs/clone/bin/python")
     tts_min_free_vram_mb: int = Field(default=3000, ge=0, le=6144)
     tts_audio_queue_size: int = Field(default=2, ge=1, le=4)
+    tts_playback_latency: float = Field(default=0.12, gt=0, le=1)
     tts_speed: float = Field(default=1.0)
     tts_enabled: bool = Field(default=True)
     tts_streaming: bool = Field(default=True)
@@ -318,6 +323,7 @@ class Settings(BaseSettings):
             tts_chatterbox_python=self.tts_chatterbox_python,
             tts_min_free_vram_mb=self.tts_min_free_vram_mb,
             tts_audio_queue_size=self.tts_audio_queue_size,
+            tts_playback_latency=self.tts_playback_latency,
             tts_speed=self.tts_speed,
             tts_enabled=self.tts_enabled,
             tts_streaming=self.tts_streaming,

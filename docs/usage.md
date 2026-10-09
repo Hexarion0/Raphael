@@ -100,6 +100,44 @@ that preparation; activate `.venv` first. The script does not force GPU settings
 
 ## Listening, captions, and interruptions
 
+For the desktop web interface, run `raphael web`. It starts the same voice
+listener and opens `http://127.0.0.1:8765`. The browser displays a voice orb,
+the current reply in a speech bubble, status, and command feedback.
+The bubble stays readable until the next request or until you dismiss it; saved
+conversation history is not displayed on this page. Text messages use the same queue and memory as
+microphone requests. Mute, stop, and end-session
+buttons run `/mute`, `/stop`, and `/exit`. Voice capture and playback use the
+PC's devices; the page does not request the browser's microphone. You can draft
+text while disconnected; runtime actions become available when the page reconnects.
+
+Use `--no-open-browser` for manual opening or `--web-port 8766` for a different
+port. Run one Raphael process at a time. The server binds to `127.0.0.1`, so
+this version does not accept connections from a phone or another computer.
+
+Keyboard input is enabled automatically when listening in an interactive terminal.
+Type at the owner-name prompt (for example, `[hexarion]: `) and press Enter;
+no wake phrase is needed. The label uses `RAPHAEL_PREFERRED_NAME` when set,
+otherwise the desktop account name. Logs and speech appear above the input
+row, preserving your draft while you type. Backspace removes a character,
+Ctrl-U clears the draft, and Ctrl-W removes the last word.
+Commands report their result with a `[system]:` message, including in normal
+console mode. Typed requests use the
+same conversation, memory confirmations, and validated actions as voice requests.
+A new typed message cancels the previous request. Replies can still be spoken.
+
+| Command | Behavior |
+| --- | --- |
+| `/mute` | Toggle microphone input off/on. Typed messages and spoken replies still work. |
+| `/stop` | Cancel the current recording, queued request, reply generation, and playback. |
+| `/exit` | Shut down the listener and voice worker and return to the shell. |
+| `/help` | Show keyboard controls. |
+
+Provider overrides such as `/fast explain this` also work in typed messages.
+Use `raphael start --no-text-input` to disable the keyboard reader, or
+`--text-input` to enable it explicitly (including redirected stdin). EOF closes
+keyboard input while leaving voice listening active. Microphone mute is temporary
+and does not change `.env`; it discards pending voice capture, not conversation memory.
+
 Listening keeps microphone ingestion separate from wake inference, transcription,
 and callbacks. It records immediately after wake detection without a spoken
 wake greeting. Recent audio is retained to catch the beginning of your command.
@@ -123,8 +161,9 @@ direct speech can prompt a repeat without executing or saving the uncertain text
 Set `SHOW_AI_TRANSCRIPTS=true` for captions that reveal letters as the voice
 plays, including local greetings and clock answers. For a single run, use
 `--show-ai-transcripts` or `--no-show-ai-transcripts` to override this setting.
-The terminal updates a `RAPHAEL: ` line while the sentence is spoken. Ordinary
-logs appear above it, and interruptions leave only the reached prefix.
+The terminal appends letters to one `RAPHAEL: ` line for the whole reply,
+wrapping naturally when the terminal row fills. Ordinary logs use separate lines,
+and interruptions leave only the reached prefix.
 [Piper's native phoneme/audio alignments](https://github.com/OHF-Voice/piper1-gpl/blob/main/docs/ALIGNMENTS.md)
 provide spoken-word timing from the same generated waveform; letters are
 interpolated within each word's audio span. The playback cursor accounts for the
@@ -278,6 +317,11 @@ it does not confirm that a window appeared. See [action development](actions.md)
 `TTS_STREAMING=true` (the default) connects provider tokens to sentence-sized speech.
 Generation continues during playback, so the first sentence can play before the
 whole response finishes. Set `TTS_STREAMING=false` to restore batch replies.
+Playback uses 1,024-frame blocks and requests a 120 ms output buffer so brief
+Python scheduling delays are less likely to interrupt audio. If speech stutters,
+set `TTS_PLAYBACK_LATENCY=0.20` in `.env` and restart RAPHAEL. Larger buffers add
+some delay before sound starts. Playback warnings report output-buffer underruns;
+this setting affects playback buffering, not model synthesis time or speaking speed.
 Reasoning tags are filtered across token boundaries. Code remains in conversation
 history and is omitted from spoken output. Provider fallback happens before text
 arrives; a connection failure after a partial answer is reported rather than

@@ -203,6 +203,135 @@ def wait_for(predicate, timeout=2.0):
         time.sleep(0.005)
 
 
+def test_keyboard_works_with_muted_microphone_and_bypasses_stt():
+    from unittest.mock import MagicMock
+
+    detector, stt, tts = MagicMock(), MagicMock(), MagicMock()
+    received = []
+    completed = Event()
+
+    def respond(text, info, audio):
+        received.append((text, info, audio.size))
+        completed.set()
+        return True
+
+    loop = WakeListenerLoop(
+        MockAudioBackend(), detector=detector, stt=stt, tts=tts, on_transcription=respond,
+    )
+    loop.start()
+    try:
+        assert loop.toggle_microphone_mute()
+        loop._audio_callback(np.ones(1280, dtype=np.float32), 1280, None, None)
+        assert loop._frame_queue.empty()
+        assert loop.submit_text("What is Raphael?")
+        assert completed.wait(timeout=1)
+        wait_for(lambda: loop.state == ListenerState.LISTENING_WAKE)
+        assert received[0][0] == "What is Raphael?"
+        assert received[0][1]["input_source"] == "keyboard"
+        assert received[0][2] == 0
+        stt.transcribe.assert_not_called()
+        stt.transcribe_detailed.assert_not_called()
+        assert not loop.recorder.is_recording()
+        assert not loop.toggle_microphone_mute()
+    finally:
+        loop.stop()
+
+
+def test_keyboard_stop_cancels_active_reply_and_listener_accepts_next_message():
+    from unittest.mock import MagicMock
+
+    entered, canceled, finished = Event(), Event(), Event()
+    received = []
+    tts = MagicMock()
+
+    def respond(text, info, _audio):
+        received.append(text)
+        if text == "first":
+            entered.set()
+            assert info["cancel_event"].wait(timeout=1)
+            canceled.set()
+        else:
+            finished.set()
+        return False
+
+    loop = WakeListenerLoop(
+        MockAudioBackend(), detector=MagicMock(), tts=tts, on_transcription=respond,
+    )
+    loop.start()
+    try:
+        assert loop.submit_text("first")
+        assert entered.wait(timeout=1)
+        loop.cancel_response()
+        assert canceled.wait(timeout=1)
+        assert loop.is_running
+        tts.stop.assert_called()
+        assert loop.submit_text("second")
+        assert finished.wait(timeout=1)
+        assert received == ["first", "second"]
+    finally:
+        loop.stop()
+
+
+def test_muting_discards_recording_and_old_queued_voice_after_unmute():
+    from unittest.mock import MagicMock
+
+    callback = MagicMock()
+    loop = WakeListenerLoop(MockAudioBackend(), detector=MagicMock(), on_transcription=callback)
+    loop._running = True
+    loop._start_recording()
+    loop.recorder.add_frame(np.ones(1280, dtype=np.float32))
+    old_info = {"microphone_epoch": loop._microphone_epoch}
+    assert loop.toggle_microphone_mute()
+    assert not loop.recorder.is_recording()
+    assert loop.recorder.get_audio().size == 0
+    assert not loop.toggle_microphone_mute()
+    loop._processing_queue.put((np.ones(1280), old_info, loop._recording_generation))
+    loop._processing_queue.put((np.empty(0), {
+        "input_source": "keyboard", "typed_text": "new message", "cancel_event": Event(),
+    }, loop._recording_generation))
+
+    def finish(text, *_args):
+        assert text == "new message"
+        loop._stop_event.set()
+        return False
+
+    loop.on_transcription = finish
+    loop._process_worker()
+    callback.assert_not_called()
+
+
+def test_mute_during_stt_returns_to_standby_after_unmute():
+    from unittest.mock import MagicMock
+
+    entered, release = Event(), Event()
+    stt, callback = MagicMock(), MagicMock()
+
+    def transcribe(*_args, **_kwargs):
+        entered.set()
+        assert release.wait(timeout=1)
+        return {"text": "old voice input"}
+
+    stt.transcribe_detailed.side_effect = transcribe
+    loop = WakeListenerLoop(
+        MockAudioBackend(), detector=MagicMock(), stt=stt, on_transcription=callback,
+    )
+    loop.start()
+    try:
+        loop._set_state(ListenerState.PROCESSING)
+        loop._processing_queue.put((np.ones(1280), {
+            "microphone_epoch": loop._microphone_epoch,
+        }, loop._recording_generation))
+        assert entered.wait(timeout=1)
+        assert loop.toggle_microphone_mute()
+        assert not loop.toggle_microphone_mute()
+        release.set()
+        wait_for(lambda: loop.state == ListenerState.LISTENING_WAKE)
+        callback.assert_not_called()
+    finally:
+        release.set()
+        loop.stop()
+
+
 def test_keyword_inference_does_not_block_frames_and_reset_discards_results(monkeypatch):
     entered, release = Event(), Event()
 

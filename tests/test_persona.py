@@ -114,6 +114,48 @@ def test_persona_file_reloads_into_actual_system_prompt(tmp_path):
     assert "Use dry humor." not in second
 
 
+def test_builtin_persona_does_not_compete_with_plainspoken_preferences():
+    from raphael.persona import build_advanced_persona
+
+    prompt = build_advanced_persona(
+        "user", "05:27", "Linux", "test", "unknown", 0, 0, 0, 4, 1.0, 8.0,
+        persona_preferences="Be plainspoken and bluntly honest.",
+    )
+
+    assert "Be plainspoken and bluntly honest." in prompt
+    assert "Be openly playful and flirty" not in prompt
+    assert "Be nurturing" not in prompt
+    assert "Do not narrate your tone" in prompt
+    assert "User: What's up, Raphael?\nRAPHAEL: Hey, what's up?" in prompt
+    assert "User: Wait, I said what's up Raphael?\nRAPHAEL: My mistake. Hey!" in prompt
+    assert "User: Okay, good.\nRAPHAEL: Alright." in prompt
+
+
+def test_plainspoken_context_preserves_facts_and_archives(tmp_path):
+    from raphael.memory.manager import ConversationManager
+    from raphael.memory.models import ConversationTurn, MemoryItem
+    from raphael.memory.store import MemoryStore
+    from raphael.persona import PERSONA_CONTEXT_VERSION
+
+    store = MemoryStore(db_path=str(tmp_path / "memory.db"))
+    old_session = "desktop_session:warm-companion-v2"
+    try:
+        store.save_turn(ConversationTurn(
+            role="assistant", content="Calm, present, ready to talk.", session_id=old_session,
+        ))
+        fact_id = store.save_memory(MemoryItem(content="The user prefers English."))
+        manager = ConversationManager(
+            store=store, session_id=f"desktop_session:{PERSONA_CONTEXT_VERSION}",
+        )
+        assert manager.get_recent_turns() == []
+        assert store.get_recent_turns(session_id=old_session)[0].content == (
+            "Calm, present, ready to talk."
+        )
+        assert store.get_memory(fact_id).content == "The user prefers English."
+    finally:
+        store.close()
+
+
 @pytest.mark.parametrize("contents", [b"\xff\xfe", b"x" * (32 * 1024 + 1), b"# Comment\n\n"])
 def test_unusable_persona_file_falls_back_to_builtin(tmp_path, contents):
     persona_file = tmp_path / "persona.txt"

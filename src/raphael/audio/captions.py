@@ -4,10 +4,8 @@ from __future__ import annotations
 
 import logging
 import re
-import shutil
 import sys
 import threading
-import unicodedata
 from collections.abc import Callable
 from typing import TextIO
 
@@ -27,44 +25,12 @@ def _plain_text(text: str) -> str:
     )
 
 
-def _cell_width(char: str) -> int:
-    if unicodedata.combining(char):
-        return 0
-    return 2 if unicodedata.east_asian_width(char) in {"W", "F"} else 1
-
-
-def _fit_line(text: str, columns: int) -> str:
-    """Show the newest caption characters without wrapping the terminal line."""
-    available = max(0, columns - 1)
-    if sum(_cell_width(char) for char in text) <= available:
-        return text
-    if available < 2:
-        return "" if available == 0 else "…"
-    suffix: list[str] = []
-    used = 1  # Ellipsis.
-    for char in reversed(text):
-        width = _cell_width(char)
-        if used + width > available:
-            break
-        suffix.append(char)
-        used += width
-    tail = "".join(reversed(suffix))
-    while tail and unicodedata.combining(tail[0]):
-        tail = tail[1:]
-    return "…" + tail
-
-
 class TerminalCaptions:
-    """Display cumulative visible prefixes supplied by the audio player.
+    """Append playback-driven captions, letting the terminal wrap naturally.
 
-    ``start(full_text)`` opens a sentence after playback starts. Each ``update``
-    supplies its visible prefix; the renderer never advances on its own. A final
-    or interrupted update saves that prefix as a completed terminal line. The
-    next sentence starts another line. ``close`` saves a currently visible
-    partial sentence and resets the renderer, which can be started again.
-
-    TTY progress rewrites one line. Redirected output receives only final or
-    interrupted snapshots, with no terminal escapes or intermediate prefixes.
+    Sentences share one reply line and one prefix until ``close``, interruption,
+    or a log ends the line. TTY output appends only newly visible characters;
+    redirected output appends only completed or interrupted sentence snapshots.
     All output, including caption-aware logs, shares one lock.
     """
 
@@ -77,14 +43,15 @@ class TerminalCaptions:
     ) -> None:
         self.stream = sys.stdout if stream is None else stream
         self.prefix = _plain_text(prefix).rstrip() + " "
+        # Retain the width argument for callers; wrapping is handled by the terminal.
         self.width = width
         self.is_tty = bool(getattr(self.stream, "isatty", lambda: False)())
         self._lock = threading.RLock()
         self._full_text = ""
         self._visible_text = ""
         self._active = False
-        self._drawn = False
-        self._last_line: str | None = None
+        self._line_open = False
+        self._emitted_text = ""
 
     def start(self, full_text: str) -> None:
         """Start a sentence, preserving a previously unfinished visible prefix."""
@@ -94,8 +61,6 @@ class TerminalCaptions:
             self._full_text = _plain_text(full_text)
             self._visible_text = ""
             self._active = bool(self._full_text)
-            if self._active and self.is_tty:
-                self._draw_locked()
 
     def update(
         self,
@@ -127,49 +92,44 @@ class TerminalCaptions:
         with self._lock:
             if self._active:
                 self._finish_locked(interrupted=True)
+            self._end_line_locked()
 
     def write_log(self, message: str) -> None:
-        """Write a formatted log between caption redraws under the same lock."""
+        """Separate logs from speech, then restore any active caption prefix."""
         with self._lock:
-            if self.is_tty and self._drawn:
-                self._clear_locked()
+            self._end_line_locked()
             self.stream.write(message.rstrip("\r\n") + "\n")
-            self.stream.flush()
+            self._emitted_text = ""
             if self.is_tty and self._active:
                 self._draw_locked()
+            self.stream.flush()
 
-    def _draw_locked(self, *, interrupted: bool = False) -> None:
-        line = self.prefix + self._visible_text
-        if interrupted:
-            line += " [interrupted]"
-        columns = self.width if self.width is not None else shutil.get_terminal_size().columns
-        line = _fit_line(line, columns)
-        if self._last_line == line and self._drawn:
+    def _draw_locked(self) -> None:
+        if not self._visible_text or self._visible_text == self._emitted_text:
             return
-        self.stream.write("\r\x1b[2K" + line)
+        if not self._emitted_text:
+            self.stream.write(" " if self._line_open else self.prefix)
+            self._line_open = True
+        self.stream.write(self._visible_text[len(self._emitted_text):])
+        self._emitted_text = self._visible_text
         self.stream.flush()
-        self._last_line = line
-        self._drawn = True
 
-    def _clear_locked(self) -> None:
-        self.stream.write("\r\x1b[2K")
-        self._drawn = False
-        self._last_line = None
+    def _end_line_locked(self) -> None:
+        if self._line_open:
+            self.stream.write("\n")
+            self.stream.flush()
+            self._line_open = False
 
     def _finish_locked(self, *, interrupted: bool) -> None:
         if self._visible_text:
-            if self.is_tty:
-                self._draw_locked(interrupted=interrupted)
-                self.stream.write("\n")
-            else:
-                marker = " [interrupted]" if interrupted else ""
-                self.stream.write(self.prefix + self._visible_text + marker + "\n")
-        elif self.is_tty and self._drawn:
-            self._clear_locked()
+            self._draw_locked()
+            if interrupted:
+                self.stream.write(" [interrupted]")
+        if interrupted:
+            self._end_line_locked()
         self.stream.flush()
-        self._full_text = self._visible_text = ""
-        self._active = self._drawn = False
-        self._last_line = None
+        self._full_text = self._visible_text = self._emitted_text = ""
+        self._active = False
 
 
 class CaptionLoggingHandler(logging.StreamHandler):

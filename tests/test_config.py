@@ -74,6 +74,19 @@ def test_chatterbox_voice_profile_and_fallback_settings_reach_audio_config(tmp_p
     assert audio.tts_audio_queue_size == 1
 
 
+def test_tts_playback_latency_is_configurable_and_validated():
+    import pytest
+    from pydantic import ValidationError
+
+    with patch.dict(os.environ, {}, clear=True):
+        assert Settings(_env_file=None).audio.tts_playback_latency == 0.12
+        settings = Settings(_env_file=None, tts_playback_latency=0.2)
+        assert settings.audio.tts_playback_latency == 0.2
+        for latency in (0, -0.1, 1.1, float("nan"), float("inf")):
+            with pytest.raises(ValidationError):
+                Settings(_env_file=None, tts_playback_latency=latency)
+
+
 def test_audio_device_indices_and_names_from_env(tmp_path):
     from raphael.config import AudioConfig
 

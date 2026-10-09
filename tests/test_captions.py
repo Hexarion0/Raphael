@@ -22,6 +22,7 @@ def test_redirected_output_contains_only_final_snapshot():
     assert output.getvalue() == ""
 
     captions.update("What's on your mind?", finished=True)
+    captions.close()
 
     assert output.getvalue() == "RAPHAEL: What's on your mind?\n"
 
@@ -38,7 +39,7 @@ def test_interruption_saves_visible_words_without_unheard_tail():
     assert output.getvalue() == "RAPHAEL: Take your [interrupted]\n"
 
 
-def test_multiple_sentences_are_preserved_once_each():
+def test_multiple_sentences_share_one_reply_line():
     output = io.StringIO()
     captions = TerminalCaptions(output)
     for sentence in ["Hello, Hexarion.", "What's on your mind?"]:
@@ -47,9 +48,7 @@ def test_multiple_sentences_are_preserved_once_each():
         captions.update(sentence, finished=True)
     captions.close()
 
-    assert output.getvalue().splitlines() == [
-        "RAPHAEL: Hello, Hexarion.", "RAPHAEL: What's on your mind?",
-    ]
+    assert output.getvalue() == "RAPHAEL: Hello, Hexarion. What's on your mind?\n"
 
 
 def test_close_preserves_partial_sentence_and_can_restart():
@@ -61,6 +60,7 @@ def test_close_preserves_partial_sentence_and_can_restart():
     captions.close()
     captions.start("Welcome back.")
     captions.update("Welcome back.", finished=True)
+    captions.close()
 
     assert output.getvalue() == (
         "RAPHAEL: Hello [interrupted]\nRAPHAEL: Welcome back.\n"
@@ -90,8 +90,9 @@ def test_tty_updates_only_when_supplied_and_never_repeats_same_prefix():
     assert "Hello." not in written
 
     captions.update("Hello.", finished=True)
+    captions.close()
 
-    assert output.getvalue().endswith("\r\x1b[2KRAPHAEL: Hello.\n")
+    assert output.getvalue() == "RAPHAEL: Hello.\n"
 
 
 def test_empty_interruption_does_not_save_unplayed_words():
@@ -110,6 +111,7 @@ def test_caption_control_sequences_cannot_inject_terminal_commands():
     sentence = "Hello\x1b[31m,\x1b[0m\nHexarion."
     captions.start(sentence)
     captions.update(sentence, finished=True)
+    captions.close()
 
     assert output.getvalue() == "RAPHAEL: Hello, Hexarion.\n"
 
@@ -122,6 +124,7 @@ def test_progressive_secret_prefixes_never_leak_token_characters():
     for end in range(1, len(sentence)):
         captions.update(sentence[:end])
     captions.update(sentence, finished=True)
+    captions.close()
 
     text = output.getvalue()
     assert "nvapi" not in text
@@ -141,19 +144,20 @@ def test_interrupting_during_a_secret_saves_only_safe_prefix():
     assert output.getvalue() == "RAPHAEL: The token is [interrupted]\n"
 
 
-def test_tty_line_does_not_wrap_and_preserves_latest_characters():
+def test_tty_preserves_long_reply_for_natural_terminal_wrapping():
     output = TtyBuffer()
     captions = TerminalCaptions(output, width=18)
-    captions.start("This is a long sentence.")
-    captions.update("This is a long sentence.", finished=True)
+    for sentence in ["This is a long sentence.", "Here is another."]:
+        captions.start(sentence)
+        for end in range(1, len(sentence) + 1):
+            captions.update(sentence[:end])
+        captions.update(sentence, finished=True)
+    captions.close()
 
-    last_line = output.getvalue().rsplit("\r\x1b[2K", 1)[1].rstrip("\n")
-    assert len(last_line) <= 17
-    assert last_line.startswith("…")
-    assert last_line.endswith("sentence.")
+    assert output.getvalue() == "RAPHAEL: This is a long sentence. Here is another.\n"
 
 
-def test_logging_hides_then_restores_current_caption():
+def test_logging_separates_then_restores_current_caption():
     output = TtyBuffer()
     captions = TerminalCaptions(output, width=80)
     captions.start("Hello.")
@@ -161,9 +165,10 @@ def test_logging_hides_then_restores_current_caption():
     captions.write_log("INFO: background work finished")
 
     assert output.getvalue().endswith(
-        "\r\x1b[2KINFO: background work finished\n\r\x1b[2KRAPHAEL: Hel"
+        "RAPHAEL: Hel\nINFO: background work finished\nRAPHAEL: Hel"
     )
     captions.update("Hello.", finished=True)
+    captions.close()
     assert output.getvalue().endswith("RAPHAEL: Hello.\n")
 
 
@@ -223,9 +228,10 @@ def test_concurrent_logs_cannot_split_caption_control_sequences():
         worker.join(timeout=1)
         assert not worker.is_alive()
     captions.update("Hello.", finished=True)
+    captions.close()
 
     text = output.getvalue()
     for index in range(20):
         assert f"log-{index}\n" in text
-    assert text.count("\x1b") == text.count("\x1b[2K")
+    assert "\x1b" not in text
     assert text.endswith("RAPHAEL: Hello.\n")

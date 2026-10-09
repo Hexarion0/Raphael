@@ -263,3 +263,48 @@ def test_explicit_output_device_numeric_string_and_name():
     for value, expected in [("3", 3), ("USB Speaker", "USB Speaker")]:
         tts = TextToSpeech(enabled=False, output_device=value)
         assert tts.output_device == expected
+
+
+@pytest.mark.parametrize("latency", [None, 0.2])
+def test_playback_buffers_audio_without_changing_waveform(monkeypatch, latency):
+    from types import SimpleNamespace
+
+    from raphael.config import Settings
+
+    monkeypatch.setattr(
+        "raphael.audio.tts.get_settings",
+        lambda: Settings(_env_file=None, tts_playback_latency=0.12),
+    )
+    options = {} if latency is None else {"playback_latency": latency}
+    tts = TextToSpeech(enabled=False, output_device="USB Speaker", **options)
+    tts.enabled = True
+    audio = np.ones(2400, dtype=np.float32)
+    monkeypatch.setattr(tts, "synthesize", lambda _text: (audio, 24000))
+    play = patch("raphael.audio.tts.sd", SimpleNamespace(
+        play=lambda data, **kwargs: calls.append((data, kwargs)),
+        get_stream=lambda: SimpleNamespace(active=False, latency=0.128),
+    ))
+    calls = []
+    with play:
+        assert tts.speak("Buffered speech.")
+    assert calls[0][0] is audio
+    assert calls[0][1] == {
+        "samplerate": 24000, "device": "USB Speaker",
+        "latency": latency or 0.12, "blocksize": 1024,
+    }
+
+
+@pytest.mark.parametrize("underflow", [False, True])
+def test_playback_reports_underruns_without_failing_speech(monkeypatch, caplog, underflow):
+    from types import SimpleNamespace
+
+    tts = TextToSpeech(enabled=False)
+    tts.enabled = True
+    monkeypatch.setattr(tts, "synthesize", lambda _text: (np.ones(100), 24000))
+    monkeypatch.setattr("raphael.audio.tts.sd", SimpleNamespace(
+        play=lambda *_args, **_kwargs: None,
+        get_stream=lambda: SimpleNamespace(active=False),
+        get_status=lambda: SimpleNamespace(output_underflow=underflow),
+    ))
+    assert tts.speak("Test speech.")
+    assert ("TTS playback underrun" in caplog.text) is underflow

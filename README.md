@@ -36,12 +36,15 @@ account or a running local Ollama server with a model installed.
 git clone https://github.com/Hexarion0/Raphael.git
 cd Raphael
 bash setup.sh
-.venv/bin/raphael start
+raphael start
 ```
 
 The installer creates `.venv`, installs RAPHAEL, downloads default Amy and
 Whisper `base.en`, and opens the configuration wizard for API keys, voice, and
 audio devices. If `.env` already exists, it offers to reconfigure it.
+It also installs a `raphael` launcher in `~/.local/bin` that uses this checkout's
+`.venv` and CUDA libraries automatically. Keep the checkout in place and add
+`~/.local/bin` to your shell's PATH if it is not already there.
 
 For a manual installation:
 
@@ -60,8 +63,27 @@ copy `.env.example` to `.env` and edit it; the example uses Amy and CPU transcri
 Activation is optional with the commands above. In Bash/Zsh use
 `source .venv/bin/activate`; in fish use `source .venv/bin/activate.fish`.
 After activation, `raphael start` is equivalent to `.venv/bin/raphael start`.
+To add the standalone command to an existing installation, run
+`bash scripts/install_raphael_command.sh`. Then `raphael` starts listening from
+any directory without activation; options such as `raphael setup` and
+`raphael start dev` are forwarded unchanged.
 If audio initialization reports a missing PortAudio library, install your
 Linux distribution's PortAudio runtime and rerun setup.
+
+### Desktop web interface
+
+Run `raphael web` to start the assistant and open its desktop page at
+`http://127.0.0.1:8765`. The page centers on a voice orb, with the current reply
+in a temporary speech bubble and an input for typed messages and commands.
+Microphone, stop, help, and exit controls report their results on the page.
+It uses the PC's microphone and speakers, with the same memory and validated
+actions as the terminal. You can also type `/mute`, `/stop`, `/exit`, and `/help`.
+
+Use `raphael web --no-open-browser` to open the page yourself, or
+`raphael web --web-port 8766` if the default port is in use. Stop an existing
+terminal Raphael session before starting web mode so two processes do not
+share the microphone and voice models. This first interface serves the PC;
+same-Wi-Fi phone access and Telegram integration are planned next.
 
 ### Choose a voice
 

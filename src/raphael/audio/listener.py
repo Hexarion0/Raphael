@@ -89,6 +89,8 @@ class WakeListenerLoop:
         self._last_wake_info: dict[str, Any] = {}
         self._lock = threading.Lock()
         self._running = False
+        self._microphone_muted = False
+        self._microphone_epoch = 0
         self._stop_event = threading.Event()
         self._frame_queue: queue.Queue = queue.Queue(maxsize=8)
         self._processing_queue: queue.Queue = queue.Queue(maxsize=4)
@@ -151,9 +153,77 @@ class WakeListenerLoop:
 
     def _audio_callback(self, indata: np.ndarray, frames: int, time_info: Any, status: Any) -> None:
         """Copy borrowed audio and enqueue it; never run inference or take the state lock."""
-        if self._running:
-            if self._offer(self._frame_queue, (indata.copy(), time.monotonic())):
+        microphone_epoch = self._microphone_epoch
+        if self._running and not self._microphone_muted:
+            if self._offer(self._frame_queue, (
+                indata.copy(), time.monotonic(), microphone_epoch,
+            )):
                 self.dropped_frames += 1
+
+    def cancel_response(self) -> None:
+        """Cancel pending capture, generation, and playback without stopping listening."""
+        with self._lock:
+            self._cancel_response_locked()
+
+    def _cancel_response_locked(self) -> None:
+        if self._response_cancel is not None:
+            self._response_cancel.set()
+        self._recording_generation += 1
+        self._microphone_epoch += 1
+        self.recorder.cancel()
+        self._last_wake_info = {}
+        self._recent_audio.clear()
+        self._speech_streak = 0
+        self.detector.reset(set_cooldown=False)
+        self._set_state(ListenerState.LISTENING_WAKE)
+        self._stop_output()
+
+    def toggle_microphone_mute(self) -> bool:
+        """Toggle microphone ingestion; discard pending voice input when muting."""
+        with self._lock:
+            self._microphone_muted = not self._microphone_muted
+            self._microphone_epoch += 1
+            while True:
+                try:
+                    self._frame_queue.get_nowait()
+                    self._frame_queue.task_done()
+                except queue.Empty:
+                    break
+            self._recent_audio.clear()
+            self._speech_streak = 0
+            self.detector.reset(set_cooldown=False)
+            if self._state == ListenerState.RECORDING:
+                self.recorder.cancel()
+                self._recording_generation += 1
+                self._set_state(ListenerState.LISTENING_WAKE)
+            return self._microphone_muted
+
+    def _discard_voice_request(self, generation: int) -> None:
+        """Leave standby usable after a muted request is discarded during STT."""
+        with self._lock:
+            if (
+                self._running and generation == self._recording_generation
+                and self._state == ListenerState.PROCESSING
+            ):
+                self._set_state(ListenerState.LISTENING_WAKE)
+
+    def submit_text(self, text: str) -> bool:
+        """Replace the current request with directly addressed keyboard input."""
+        text = text.strip()
+        if not text:
+            return False
+        with self._lock:
+            if not self._running:
+                return False
+            self._cancel_response_locked()
+            self._response_cancel = threading.Event()
+            info = {"input_source": "keyboard", "typed_text": text,
+                    "cancel_event": self._response_cancel}
+            self._offer(self._processing_queue, (
+                np.empty(0, dtype=np.float32), info, self._recording_generation,
+            ))
+            self._set_state(ListenerState.PROCESSING)
+            return True
 
     def _start_recording(self) -> None:
         if self._response_cancel is not None:
@@ -254,12 +324,15 @@ class WakeListenerLoop:
     def _frame_worker(self) -> None:
         while not self._stop_event.is_set():
             try:
-                audio, received_at = self._frame_queue.get(timeout=0.1)
+                audio, received_at, microphone_epoch = self._frame_queue.get(timeout=0.1)
             except queue.Empty:
                 continue
             try:
                 with self._lock:
-                    if not self._running:
+                    if (
+                        not self._running or self._microphone_muted
+                        or microphone_epoch != self._microphone_epoch
+                    ):
                         continue
                     self._frame_received_at = received_at
                     self._handle_frame(audio)
@@ -366,6 +439,7 @@ class WakeListenerLoop:
             if not recording:
                 recorded = self.recorder.get_audio()
                 info = self._last_wake_info.copy()
+                info["microphone_epoch"] = self._microphone_epoch
                 trace = TurnTrace()
                 trace.mark("capture_started", at=self.recorder.capture_started_at)
                 if self.recorder.last_speech_observed_at is not None:
@@ -409,7 +483,19 @@ class WakeListenerLoop:
                     continue
                 if generation != self._recording_generation:
                     logger.info("Decoding superseded speech for temporary conversation context.")
-                text = ""
+                typed = info.get("input_source") == "keyboard"
+                voice_epoch = info.get("microphone_epoch", self._microphone_epoch)
+                if typed and (
+                    generation != self._recording_generation or info["cancel_event"].is_set()
+                ):
+                    continue
+                if not typed and (
+                    self._microphone_muted
+                    or voice_epoch != self._microphone_epoch
+                ):
+                    self._discard_voice_request(generation)
+                    continue
+                text = info.get("typed_text", "")
                 has_command_audio = not (
                     info.get("wake_prefix_trimmed") and not info.get("post_wake_speech", True)
                 )
@@ -446,10 +532,15 @@ class WakeListenerLoop:
                 if info.get("wake_prefix_trimmed") and not info.get("stt_needs_repeat"):
                     greeting = info.get("wake_phrase", "hey raphael")
                     text = f"{greeting}, {text}" if text else greeting
-                if not self._running:
+                if not self._running or (not typed and (
+                    self._microphone_muted
+                    or voice_epoch != self._microphone_epoch
+                )):
+                    if not typed:
+                        self._discard_voice_request(generation)
                     continue
                 with self._lock:
-                    if self.ambient and generation == self._recording_generation:
+                    if not typed and self.ambient and generation == self._recording_generation:
                         poll = getattr(self.detector, "poll", None)
                         trigger = poll() if callable(poll) else None
                         if trigger:
@@ -460,7 +551,7 @@ class WakeListenerLoop:
                         self.detector.reset(set_cooldown=False)
                 superseded = generation != self._recording_generation
                 info["superseded"] = superseded
-                if self.on_transcript_observed:
+                if self.on_transcript_observed and not typed:
                     self.on_transcript_observed(text, info)
                 if superseded:
                     logger.info("Speech resumed during STT; suppressed the old reply.")
@@ -474,7 +565,10 @@ class WakeListenerLoop:
                     # A completed old response cannot cancel a new barge-in recording.
                     if not self._running or generation != self._recording_generation:
                         continue
-                    if keep_listening and not self.ambient:
+                    if (
+                        keep_listening and not self.ambient and not typed
+                        and not self._microphone_muted
+                    ):
                         self._start_recording()
                     else:
                         self._recent_audio.clear()

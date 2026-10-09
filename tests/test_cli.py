@@ -124,6 +124,104 @@ assert "onnx" not in sys.modules
     assert "--listen" in result.stdout
 
 
+def test_keyboard_exit_cleans_up_listener_and_tts(tmp_path, monkeypatch, capsys):
+    from raphael import __main__, audio, config, platform, providers, terminal
+
+    settings = config.Settings(_env_file=None, memory_db_path=str(tmp_path / "memory.db"))
+    monkeypatch.setattr(config, "get_settings", lambda: settings)
+    monkeypatch.setattr(platform, "get_audio_backend", MagicMock())
+    monkeypatch.setattr(providers, "get_model_router", MagicMock())
+    for component in ("WakeWordDetector", "SpeechToText", "VoiceRecorder"):
+        monkeypatch.setattr(audio, component, MagicMock())
+    tts = MagicMock()
+    monkeypatch.setattr(audio, "TextToSpeech", MagicMock(return_value=tts))
+    loop = SimpleNamespace(
+        is_running=True, start=MagicMock(), stop=MagicMock(), submit_text=MagicMock(),
+        cancel_response=MagicMock(), toggle_microphone_mute=MagicMock(return_value=True),
+    )
+    monkeypatch.setattr(audio, "WakeListenerLoop", MagicMock(return_value=loop))
+    inputs = []
+
+    class ImmediateTerminal(terminal.TerminalInput):
+        def start(self):
+            inputs.append(self)
+            for line in ["/mute", "/stop", "/exit"]:
+                self.handle_line(line)
+
+    monkeypatch.setattr(terminal, "TerminalInput", ImmediateTerminal)
+    monkeypatch.setattr(sys, "argv", ["raphael", "start", "--text-input"])
+    assert __main__.main() == 0
+    loop.toggle_microphone_mute.assert_called_once()
+    assert loop.cancel_response.call_count == 2
+    loop.submit_text.assert_not_called()
+    loop.stop.assert_called_once()
+    tts.close.assert_called_once()
+    assert inputs[0]._closed.is_set()
+    output = capsys.readouterr().out
+    assert "[system]: Microphone muted" in output
+    assert "[system]: Stopped the current reply." in output
+    assert "[system]: Exiting RAPHAEL" in output
+
+
+def test_web_mode_reuses_voice_callbacks_and_controls(tmp_path, monkeypatch):
+    from threading import Event
+
+    from raphael import __main__, audio, config, platform, providers, web
+    from raphael.providers.base import LLMResponse
+
+    settings = config.Settings(
+        _env_file=None, memory_db_path=str(tmp_path / "memory.db"), tts_streaming=False,
+        show_ai_transcripts=False, raphael_persona_file="", raphael_preferred_name="owner",
+    )
+    monkeypatch.setattr(config, "get_settings", lambda: settings)
+    monkeypatch.setattr(platform, "get_audio_backend", MagicMock())
+    router = MagicMock()
+    router.send.return_value = LLMResponse("Hi there.", "test", "test")
+    monkeypatch.setattr(providers, "get_model_router", lambda: router)
+    for component in ("WakeWordDetector", "SpeechToText", "VoiceRecorder"):
+        monkeypatch.setattr(audio, component, MagicMock())
+    tts = MagicMock()
+    tts.clean_text_for_speech.side_effect = lambda text: text
+
+    def speak(text, **controls):
+        controls["on_start"]()
+        controls["on_progress"](text, True, False)
+        return True
+
+    tts.speak.side_effect = speak
+    monkeypatch.setattr(audio, "TextToSpeech", MagicMock(return_value=tts))
+    loop = SimpleNamespace(
+        is_running=True, start=MagicMock(), stop=MagicMock(), cancel_response=MagicMock(),
+        toggle_microphone_mute=MagicMock(return_value=True),
+    )
+
+    def make_loop(**kwargs):
+        loop.submit_text = lambda text: kwargs["on_transcription"](
+            text, {"input_source": "keyboard", "cancel_event": Event()}, None,
+        )
+        return loop
+
+    monkeypatch.setattr(audio, "WakeListenerLoop", make_loop)
+    ui = web.DesktopWebUI("owner", "hey raphael")
+    monkeypatch.setattr(web, "DesktopWebUI", lambda *_args, **_kwargs: ui)
+
+    def start(submit, **_kwargs):
+        for text in ["hello there", "/mute", "/stop", "/exit"]:
+            assert submit(text)
+        return "http://127.0.0.1:8765"
+
+    ui.start = start
+    ui.close = MagicMock()
+    monkeypatch.setattr(sys, "argv", ["raphael", "web", "--no-open-browser"])
+    assert __main__.main() == 0
+    assert [entry["text"] for entry in ui.snapshot()["messages"]] == ["hello there", "Hi there."]
+    assert ui.snapshot()["muted"]
+    assert ui.snapshot()["provider"] == "test / test"
+    loop.stop.assert_called_once()
+    tts.close.assert_called_once()
+    ui.close.assert_called_once()
+
+
 def test_listen_archives_legacy_style_but_keeps_saved_facts(tmp_path, monkeypatch):
     """Exercise the provider request after switching away from the legacy persona."""
     from raphael import __main__, audio, config, platform, providers

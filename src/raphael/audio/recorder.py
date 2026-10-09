@@ -128,6 +128,11 @@ class VoiceRecorder:
 
         return True
 
+    def cancel(self) -> None:
+        """Discard an unfinished utterance without returning its audio."""
+        self._is_recording = False
+        self._buffer.clear()
+
     def get_audio(self) -> np.ndarray:
         """Return the accumulated audio as a single 1D float32 numpy array."""
         if not self._buffer:

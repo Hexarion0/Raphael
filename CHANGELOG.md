@@ -2,6 +2,29 @@
 
 ## Unreleased — 0.3.6 development
 
+- Add breathing, orbiting particles, flowing ribbons, and distinct voice-state
+  animations to the orb. Cache geometry calculations, batch canvas draws, cap
+  high-DPI resolution, and reduce frame rates while waiting and speaking.
+- Buffer TTS playback in 1,024-frame blocks with configurable
+  `TTS_PLAYBACK_LATENCY=0.12` to tolerate scheduling delays, and report underruns.
+- Add `raphael web`, a PC-local desktop page using the existing microphone,
+  speakers, conversation worker, memory, and actions. Display current speech,
+  status, and mute/stop/shutdown controls without new dependencies.
+- Replace the web conversation feed with a voice orb, a temporary current-reply
+  speech bubble, and a message/command input. Animate the orb from runtime states;
+  respect reduced motion and pause animation when the page is hidden. Show the
+  bubble above a layered 3D surface mesh with purple/cyan bands and a luminous core.
+- Polish the orb page with stable speech placement, readable replies with manual
+  dismissal, larger controls, accessible completed-reply announcements, offline
+  drafting, and request deadlines that recover from stalled connections.
+- Add keyboard messages alongside voice listening, with `/mute` for microphone
+  input, `/stop` for cancellation, `/exit` for shutdown, and `/help` for controls.
+  Typed messages share the conversation worker, memory, and validated actions.
+- Keep the owner-name keyboard prompt and its draft separate from background
+  logs and progressive speech captions; restore terminal input mode on exit.
+- Use plainspoken companion defaults, brief greetings and corrections, and
+  direct honesty. Start a new conversation context so earlier verbose replies
+  are not reused as style examples; preserve archived chats and saved facts.
 - Keep archived playback-status notes out of assistant dialogue sent to providers,
   and filter echoed status markers from streamed/batch replies and TTS so they
   cannot be spoken as an answer.

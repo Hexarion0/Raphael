@@ -52,6 +52,10 @@ class ConciseLogFilter(logging.Filter):
 
     _VISIBLE_INFO = (
         "🗣️ You:",
+        "⌨️ You:",
+        "[system]:",
+        "Keyboard ready",
+        "Desktop web interface:",
         "🤖 RAPHAEL",
         "Ready.",
         "Wake detected!",

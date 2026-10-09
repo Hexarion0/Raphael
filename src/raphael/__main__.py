@@ -1,8 +1,11 @@
 """Entry point for running RAPHAEL via `python -m raphael`."""
 
 import argparse
+import getpass
+import logging
 import re
 import sys
+import threading
 import time
 
 from raphael import __version__
@@ -26,6 +29,7 @@ def main() -> int:
             "run",
             "start",
             "listen",
+            "web",
             "setup",
             "record-samples",
             "train-wake",
@@ -62,6 +66,20 @@ def main() -> int:
         help="Reveal AI captions as the voice speaks",
     )
     parser.add_argument(
+        "--text-input",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Accept keyboard messages and /mute, /stop, /exit (default: on in a terminal)",
+    )
+    parser.add_argument(
+        "--web-port", type=int, default=8765,
+        help="PC-local web interface port (default: 8765)",
+    )
+    parser.add_argument(
+        "--open-browser", action=argparse.BooleanOptionalAction, default=True,
+        help="Open the browser when starting 'raphael web'",
+    )
+    parser.add_argument(
         "--count",
         type=int,
         default=8,
@@ -74,7 +92,9 @@ def main() -> int:
         help="Target wake phrase to train (default: 'Hey Raphael')",
     )
     args = parser.parse_args()
-    if args.mode == "dev" and args.command not in {"start", "listen"}:
+    if not 1 <= args.web_port <= 65535:
+        parser.error("--web-port must be between 1 and 65535")
+    if args.mode == "dev" and args.command not in {"start", "listen", "web"}:
         parser.error("the 'dev' mode can only be used with 'start' or 'listen'")
 
     # If user ran `python -m raphael setup`
@@ -164,7 +184,8 @@ def main() -> int:
         settings.providers.ollama_host,
     )
 
-    if args.listen or args.command in {"start", "listen"} or (
+    web_mode = args.command == "web"
+    if args.listen or args.text_input is True or args.command in {"start", "listen", "web"} or (
         args.command == "run" and (settings.audio.ambient_listening or args.ambient is not None)
     ):
         from raphael.audio import (
@@ -201,13 +222,14 @@ def main() -> int:
             settings.audio.show_ai_transcripts
             if args.show_ai_transcripts is None else args.show_ai_transcripts
         )
+        track_speech = show_ai_transcripts or web_mode
         tts = TextToSpeech(
             voice_name=settings.audio.tts_voice,
             engine=settings.audio.tts_engine,
             speed=settings.audio.tts_speed,
             output_device=settings.audio.output_device,
             enabled=settings.audio.tts_enabled,
-            **({"include_alignments": True} if show_ai_transcripts else {}),
+            **({"include_alignments": True} if track_speech else {}),
         )
         router = get_model_router()
         from raphael.audio.ambient import AmbientConversation, SpeechDecision
@@ -222,11 +244,25 @@ def main() -> int:
         pending_speech: list[str] = []
         unfinished_request: list[dict] = [{}]
         interrupted_reply: list[dict] = [{}]
+        keyboard_enabled = (
+            not web_mode and bool(getattr(sys.stdin, "isatty", lambda: False)())
+            if args.text_input is None else args.text_input
+        )
+        terminal_output = None
+        restore_terminal_output = None
+        if keyboard_enabled and sys.stdin.isatty() and sys.stdout.isatty():
+            from raphael.terminal_output import TerminalOutput, install_terminal_output
+
+            terminal_output = TerminalOutput(sys.stdout)
+            restore_terminal_output = install_terminal_output(terminal_output)
         captions = None
         if show_ai_transcripts:
             from raphael.audio.captions import TerminalCaptions
 
-            captions = TerminalCaptions()
+            captions = (
+                TerminalCaptions(stream=terminal_output) if terminal_output is not None
+                else TerminalCaptions()
+            )
         playback_captions = show_ai_transcripts and settings.audio.tts_enabled
         log_reply = logger.debug if playback_captions else logger.info
 
@@ -239,6 +275,15 @@ def main() -> int:
         logger.info("Conversation context: %s", conv_manager.session_id)
         memory_service = MemoryService(memory_store)
         actions = ActionRegistry.discover()
+        web_ui = None
+        if web_mode:
+            from raphael.web import DesktopWebUI
+
+            web_ui = DesktopWebUI(
+                settings.raphael_preferred_name or getpass.getuser(),
+                settings.audio.wake_word, voice_enabled=bool(tts.enabled),
+            )
+            web_ui.load_history(conv_manager.get_recent_turns(limit=100))
 
         def build_system_prompt(query: str = "") -> str:
             recalled_memories = recall_context_memories(memory_store, query)
@@ -273,10 +318,14 @@ def main() -> int:
         def show_spoken_sentence(text: str) -> None:
             if captions is not None:
                 captions.start(strip_speech_events(tts.clean_text_for_speech(text)))
+            if web_ui is not None:
+                web_ui.start_sentence()
 
         def show_speech_progress(visible: str, finished: bool, interrupted: bool) -> None:
             if captions is not None:
                 captions.update(visible, finished=finished, interrupted=interrupted)
+            if web_ui is not None:
+                web_ui.progress(strip_speech_events(visible), interrupted=interrupted)
 
         def speak_reply(text: str, block: bool = True, cancel_event=None) -> bool:
             if not loop.is_running or (cancel_event is not None and cancel_event.is_set()):
@@ -289,13 +338,13 @@ def main() -> int:
             def audio_started() -> None:
                 if trace is not None:
                     trace.mark("first_audio_playback")
-                if show_ai_transcripts:
+                if track_speech:
                     if loop.is_running and (cancel_event is None or not cancel_event.is_set()):
                         show_spoken_sentence(text)
 
-            if trace is not None or show_ai_transcripts:
+            if trace is not None or track_speech:
                 controls["on_start"] = audio_started
-            if show_ai_transcripts:
+            if track_speech:
                 def progress(visible: str, finished: bool, interrupted: bool) -> None:
                     if (
                         loop.is_running and (cancel_event is None or not cancel_event.is_set())
@@ -306,9 +355,15 @@ def main() -> int:
                 controls["on_progress"] = progress
             try:
                 mark("local_tts_requested")
-                spoken = tts.speak(text, block=block, **controls)
+                try:
+                    spoken = tts.speak(text, block=block, **controls)
+                finally:
+                    if captions is not None:
+                        captions.close()
+                    if web_ui is not None:
+                        web_ui.finish_reply()
             except Exception as err:
-                if not playback_captions:
+                if not playback_captions and web_ui is None:
                     raise
                 logger.warning("Reply audio failed: %s", err)
                 spoken = False
@@ -319,6 +374,8 @@ def main() -> int:
                 if captions is not None:
                     captions.close()
                 logger.info('🤖 RAPHAEL (text): "%s"', text)
+            if web_ui is not None and not spoken and not progress_seen[0]:
+                web_ui.text_reply(strip_speech_events(tts.clean_text_for_speech(text)))
             return spoken
 
         def linked_fragments(info: dict) -> list[str]:
@@ -335,6 +392,7 @@ def main() -> int:
         def on_transcription(text: str, wake_info: dict, audio_data) -> bool:
             mark("transcription_callback_started")
             cancel_event = wake_info.get("cancel_event")
+            typed = wake_info.get("input_source") == "keyboard"
 
             def current() -> bool:
                 return loop.is_running and not (
@@ -356,7 +414,9 @@ def main() -> int:
                 return False
             user_text = text.strip()
             raw = wake_info.get("stt_raw_text", user_text)
-            earlier_fragments = linked_fragments(wake_info)
+            earlier_fragments = [] if typed else linked_fragments(wake_info)
+            if typed:
+                pending_speech.clear()
             # Resume only an exact canceled request that has not reached playback.
             # Empty noise is not a new user instruction or permission to write facts.
             restored_fragments = (
@@ -372,7 +432,9 @@ def main() -> int:
             decision = None
             mark("speech_gate_started")
             if ambient_enabled[0]:
-                if restored_fragments:
+                if typed:
+                    decision = SpeechDecision(True, explicit=True, reason="keyboard_input")
+                elif restored_fragments:
                     decision = SpeechDecision(True, reason="resumed_after_empty_audio")
                 else:
                     with latency_phase("speech_gate"):
@@ -416,10 +478,14 @@ def main() -> int:
                 return False
 
             if not restored_fragments:
-                logger.info('🗣️ You: "%s"', user_text)
+                logger.info('%s You: "%s"', "⌨️" if typed else "🗣️", user_text)
+                if web_ui is not None:
+                    web_ui.user_message(user_text)
 
             # Clean wake phrase from user query
-            cleaned_query = strip_wake_phrase(user_text, settings.audio.wake_word)
+            cleaned_query = user_text if typed else strip_wake_phrase(
+                user_text, settings.audio.wake_word,
+            )
 
             mode_off = re.fullmatch(
                 r"(?:please\s+)?(?:stop listening|wake[ -]word mode|ambient mode off)[.!?]*",
@@ -536,7 +602,10 @@ def main() -> int:
                 memory_service.cancel_proposal()
             memory_reply = memory_service.handle(cleaned_query) if allow_memory else None
             if memory_reply is not None:
-                if ambient_enabled[0] and memory_reply.startswith("Should I remember"):
+                if (
+                    ambient_enabled[0] and not typed
+                    and memory_reply.startswith("Should I remember")
+                ):
                     wake = settings.audio.wake_word
                     memory_reply = memory_reply.replace(
                         "Say yes to save it or no to skip it.",
@@ -658,6 +727,9 @@ def main() -> int:
                     + json.dumps(decision.interpretation, ensure_ascii=False)
                 )
             system_prompt += (
+                "\nThe user's latest message was typed on the keyboard. Treat its exact "
+                "wording as intentional; do not reinterpret it as a speech recognition error."
+                if typed else
                 "\nThe user's message was transcribed from speech and may contain recognition "
                 "errors, including substituted or missing words and incorrect punctuation. "
                 "Interpret it together with the recent conversation and the likely spoken "
@@ -698,11 +770,17 @@ def main() -> int:
                 if settings.audio.tts_streaming:
                     from raphael.audio.streaming import stream_reply
 
-                    streamed = stream_reply(
-                        router, context_messages, tts, current, cancel_event=cancel_event,
-                        on_sentence_start=show_spoken_sentence if show_ai_transcripts else None,
-                        on_progress=show_speech_progress if show_ai_transcripts else None,
-                    )
+                    try:
+                        streamed = stream_reply(
+                            router, context_messages, tts, current, cancel_event=cancel_event,
+                            on_sentence_start=show_spoken_sentence if track_speech else None,
+                            on_progress=show_speech_progress if track_speech else None,
+                        )
+                    finally:
+                        if captions is not None:
+                            captions.close()
+                        if web_ui is not None:
+                            web_ui.finish_reply()
                     response = streamed.response
                     request["reply_started"] = streamed.first_audio_seconds is not None
                 else:
@@ -721,6 +799,8 @@ def main() -> int:
                 reply_text = strip_internal_reply_notes(response.content)
                 if not reply_text:
                     raise RuntimeError("Provider returned no dialogue after filtering status notes")
+                if web_ui is not None:
+                    web_ui.set_provider(response.provider, response.model)
                 log_reply(
                     '🤖 RAPHAEL: "%s" [%s/%s]',
                     reply_text,
@@ -751,6 +831,8 @@ def main() -> int:
                     said = streamed.spoken
                     if playback_captions and not said and streamed.first_audio_seconds is None:
                         logger.info('🤖 RAPHAEL (text): "%s"', reply_text)
+                    if web_ui is not None and not said and streamed.first_audio_seconds is None:
+                        web_ui.text_reply(reply_text)
                     if ambient_enabled[0]:
                         ambient_context.record_addressed("assistant", reply_text)
                         ambient_context.replied()
@@ -834,6 +916,7 @@ def main() -> int:
             on_transcription=on_transcription,
             on_barge_in=on_barge_in,
             on_interruption=on_interruption,
+            on_state_change=web_ui.set_state if web_ui is not None else None,
             recorder=VoiceRecorder(
                 sample_rate=settings.audio.sample_rate,
                 silence_duration_seconds=settings.audio.utterance_silence_seconds,
@@ -857,6 +940,14 @@ def main() -> int:
         )
 
         restore_caption_logging = None
+        terminal_input = None
+        shutdown_requested = threading.Event()
+        web_error_handler = None
+        if web_ui is not None:
+            from raphael.web import WebErrorHandler
+
+            web_error_handler = WebErrorHandler(web_ui)
+            logging.getLogger().addHandler(web_error_handler)
         if captions is not None:
             from raphael.audio.captions import install_caption_logging
 
@@ -881,6 +972,66 @@ def main() -> int:
                         "deferring Turbo initialization."
                     )
             loop.start()
+            def stop_keyboard_reply() -> None:
+                loop.cancel_response()
+                pending_speech.clear()
+                unfinished_request[0] = {}
+
+            def request_shutdown() -> None:
+                shutdown_requested.set()
+                stop_keyboard_reply()
+
+            if web_ui is not None:
+                from raphael.terminal import TerminalInput
+
+                def toggle_web_mute() -> bool:
+                    muted = loop.toggle_microphone_mute()
+                    web_ui.set_muted(muted)
+                    return muted
+
+                web_controls = TerminalInput(
+                    submit=loop.submit_text, stop_reply=stop_keyboard_reply,
+                    toggle_mute=toggle_web_mute, exit_app=request_shutdown,
+                    write=web_ui.feedback,
+                )
+
+                def submit_web_message(text: str) -> bool:
+                    if text.startswith("/") and text.split()[0].casefold() not in {
+                        "/fast", "/strong", "/deep", "/local",
+                    }:
+                        web_controls.handle_line(text)
+                        return True
+                    return loop.submit_text(text)
+
+                try:
+                    url = web_ui.start(submit_web_message, port=args.web_port)
+                except OSError as err:
+                    logger.error(
+                        "Could not start the local web interface on port %d: %s. "
+                        "Try 'raphael web --web-port 8766'.", args.web_port, err,
+                    )
+                    return 1
+                logger.info("Desktop web interface: %s", url)
+                if args.open_browser:
+                    import webbrowser
+
+                    if not webbrowser.open(url):
+                        logger.warning("Open %s in your browser to use the desktop interface.", url)
+            if keyboard_enabled:
+                from raphael.terminal import TerminalInput
+
+                terminal_input = TerminalInput(
+                    submit=loop.submit_text, stop_reply=stop_keyboard_reply,
+                    toggle_mute=loop.toggle_microphone_mute,
+                    exit_app=request_shutdown,
+                    write=lambda message: logger.info("[system]: %s", message),
+                    output=terminal_output,
+                    owner_name=settings.raphael_preferred_name or None,
+                )
+                logger.info(
+                    "Keyboard ready — type a message and press Enter. "
+                    "/mute: microphone, /stop: cancel reply, /exit: quit, /help: controls."
+                )
             if ambient_enabled[0]:
                 logger.info(
                     "Microphone active — ambient listening; address RAPHAEL for a reply "
@@ -892,14 +1043,23 @@ def main() -> int:
                     "Microphone active — waiting for wake phrase '%s'.",
                     settings.audio.wake_word.title(),
                 )
-            while True:
+            if terminal_input is not None:
+                terminal_input.start()
+            while not shutdown_requested.is_set() and loop.is_running:
                 time.sleep(0.5)
+            return 0
         except KeyboardInterrupt:
-            loop.stop()
             logger.info("Wake listener terminated cleanly.")
             return 0
         finally:
             try:
+                if terminal_input is not None:
+                    terminal_input.close()
+                if web_ui is not None:
+                    web_ui.close()
+                if web_error_handler is not None:
+                    logging.getLogger().removeHandler(web_error_handler)
+                loop.stop()
                 if captions is not None:
                     captions.close()
             finally:
@@ -907,7 +1067,11 @@ def main() -> int:
                     if restore_caption_logging is not None:
                         restore_caption_logging()
                 finally:
-                    tts.close()
+                    try:
+                        if restore_terminal_output is not None:
+                            restore_terminal_output()
+                    finally:
+                        tts.close()
 
     logger.info("Ready. Use 'raphael start' for live voice listening.")
     logger.info("Use 'python -m raphael record-samples' to record voice samples.")

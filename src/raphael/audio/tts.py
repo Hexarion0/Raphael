@@ -78,6 +78,7 @@ class TextToSpeech:
         chatterbox_python: str | Path | None = None,
         min_free_vram_mib: int | None = None,
         audio_queue_size: int | None = None,
+        playback_latency: float | None = None,
     ) -> None:
         settings = get_settings().audio
 
@@ -105,6 +106,9 @@ class TextToSpeech:
             if min_free_vram_mib is not None else settings.tts_min_free_vram_mb
         )
         self.audio_queue_size = audio_queue_size or settings.tts_audio_queue_size
+        self.playback_latency = (
+            playback_latency if playback_latency is not None else settings.tts_playback_latency
+        )
         self._repo_root = repo_root
         self._chatterbox: ChatterboxTurboWorker | None = None
         self._chatterbox_failed = False
@@ -530,7 +534,12 @@ class TextToSpeech:
                 self._is_playing = True
                 self._play_started_at = time.monotonic()
                 self._play_duration = audio.size / sample_rate
-                sd.play(audio, samplerate=sample_rate, device=self.output_device)
+                # ALSA's automatic callback period can be under 9 ms for Turbo's
+                # 24 kHz audio. Give Python workers enough scheduling headroom.
+                sd.play(
+                    audio, samplerate=sample_rate, device=self.output_device,
+                    latency=self.playback_latency, blocksize=1024,
+                )
                 self._play_started_at = time.monotonic()
                 started = self._play_started_at
             try:
@@ -597,16 +606,29 @@ class TextToSpeech:
                         self._stop_event.wait(timeout=0.01 if callback is not None else 0.02)
                 finally:
                     emit(finished=True, interrupted=interrupted)
+                    underflow = False
                     with self._playback_lock:
                         if (
                             generation == self._playback_generation
                             and serial == self._playback_serial
                         ):
+                            try:
+                                status = sd.get_status()
+                                underflow = bool(status and status.output_underflow)
+                            except Exception:
+                                # Some audio backends do not expose callback flags.
+                                pass
                             self._is_playing = False
                             if self._stream_spoken is not None:
                                 self._stream_spoken.append(self._pending_text)
                                 self._stream_played_seconds += self._play_duration
                             self._pending_text = ""
+                    if underflow:
+                        logger.warning(
+                            "TTS playback underrun: the output buffer ran dry "
+                            "(requested latency %.3fs). Increase TTS_PLAYBACK_LATENCY "
+                            "or reduce competing CPU load.", self.playback_latency,
+                        )
 
             if block:
                 monitor()

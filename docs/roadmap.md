@@ -18,7 +18,8 @@ before treating it as ready for everyday use.
 | Actions | Trusted module discovery, validation, local telemetry, allowlisted Linux app launching | Model-selected calls, web search, reminders, live desktop launch acceptance |
 | Personality | Editable preferences, curiosity, voice-requested style updates/reset | Continued evaluation during real conversations |
 | Setup | Amy/custom voice choice, device/key configuration, missing-asset reporting | Automatic Turbo setup, a desktop installer with a managed runtime, and clean-machine validation |
-| Dashboard, messaging, tone, Windows, presence | Planned | Implementation |
+| Desktop web interface | PC-local voice/text chat, live captions, status, and controls | Same-Wi-Fi phone access and desktop acceptance |
+| Messaging, tone, Windows, presence | Planned | Implementation |
 
 A checked item below means the implementation exists. It does not establish
 microphone accuracy, speaker quality, or a completed release. Historical evidence
@@ -59,6 +60,8 @@ this section rather than silently marking later milestones complete.
 - [x] Playback captions; native Piper timing with duration estimates when unavailable.
 - [x] Foreground voice requests take priority over background summaries.
 - [x] Concise normal console and explicit development diagnostics.
+- [x] Keyboard messages alongside voice, with microphone mute, reply cancellation,
+      and clean shutdown commands.
 - [x] Stage-level latency instrumentation and recorded model comparisons.
 - [ ] Repeat live acceptance on the current combined build, including PC noise and pauses.
 - [ ] Record sustained-session behavior and real provider-failure recovery.
@@ -149,15 +152,19 @@ The interface and existing behavior are documented in [actions.md](actions.md).
 
 ## Dashboard — v0.5
 
-- [ ] Add a local server and live status connection.
+- [x] Add a PC-local HTTP server and live status polling (`raphael web`).
+- [x] Share the desktop microphone, speakers, conversation worker, memory, and controls.
+- [x] Display voice/text chat, current-session history, and live speech captions.
 - [ ] Show idle/listening/thinking/speaking state, selected provider/model, and errors.
 - [ ] Display conversation history, routing decisions, and measured response stages.
 - [ ] Add useful settings controls and audio visualization.
 - [ ] Review access controls before exposing the dashboard beyond localhost.
 - [ ] Complete UI and accessibility checks against real desktop use.
 
-Start with FastAPI, WebSocket, and a small web frontend. Add React/TypeScript if
-needed; the Python assistant should not depend on an unnecessary second runtime.
+The first desktop interface uses Python's HTTP server and a small HTML/CSS/JS
+frontend. PC voice input stays in the existing listener. Add same-Wi-Fi phone
+access after desktop acceptance, then Telegram through the same conversation
+backend. Reassess FastAPI/WebSocket if those requirements need them.
 
 ## Messaging — v0.6
 

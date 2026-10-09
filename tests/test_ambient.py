@@ -290,6 +290,36 @@ def run_callbacks(
     return router, tts, loop, store, turns
 
 
+def test_keyboard_message_is_explicit_and_not_reinterpreted_as_speech(tmp_path, monkeypatch):
+    router = MagicMock()
+    router.send.return_value = LLMResponse("A profile describes someone.", "test", "test")
+    _router, _tts, _loop, store, turns = run_callbacks(
+        tmp_path, monkeypatch, [("What is a profile?", {"input_source": "keyboard"})],
+        router=router,
+    )
+    try:
+        router.send.assert_called_once()
+        prompt = router.send.call_args.args[0][0].content
+        assert "latest message was typed on the keyboard" in prompt
+        assert "message was transcribed from speech" not in prompt
+        assert [turn.content for turn in turns if turn.role == "user"] == ["What is a profile?"]
+    finally:
+        store.close()
+
+
+def test_keyboard_memory_confirmation_needs_no_wake_phrase(tmp_path, monkeypatch):
+    _router, _tts, _loop, store, _turns = run_callbacks(
+        tmp_path, monkeypatch, [
+            ("My favorite game is CS2.", {"input_source": "keyboard"}),
+            ("yes", {"input_source": "keyboard"}),
+        ],
+    )
+    try:
+        assert store.get_fact("user:favorite_game").metadata["value"] == "CS2"
+    finally:
+        store.close()
+
+
 @pytest.mark.parametrize('configured, arguments, enabled', [
     (True, (), True), (False, (), False),
     (True, ('--no-show-ai-transcripts',), False),
@@ -364,7 +394,7 @@ def test_live_ai_transcripts_show_clean_speech_and_persist_one_reply(
     try:
         output = capsys.readouterr().out
         live_lines = [line for line in output.splitlines() if line.startswith('RAPHAEL: ')]
-        expected = ['First sentence.', 'Second sentence.'] if streaming else [
+        expected = [
             'First sentence. Second sentence.',
         ]
         assert [line.removeprefix('RAPHAEL: ') for line in live_lines] == expected
@@ -500,7 +530,7 @@ def test_full_response_is_not_revealed_before_playback_progress(
     )
     try:
         assert len(spoken) == 1 and spoken[0] in output.getvalue()
-        assert ('\x1b[2K' in output.getvalue()) is tty
+        assert '\x1b' not in output.getvalue()
         if kind != 'greeting':
             assert [turn.content for turn in turns if turn.role == 'assistant'] == spoken
     finally:

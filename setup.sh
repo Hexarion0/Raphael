@@ -94,17 +94,14 @@ else
     fi
 fi
 
+bash scripts/install_raphael_command.sh
+
 echo -e "\n${CYAN}${BOLD}"
 echo "  ================================================================"
 echo "      RAPHAEL Installation Finished — Review Setup Results      "
 echo "  ================================================================"
 echo -e "${NC}"
 echo -e "To start listening:"
-if [[ "${SHELL##*/}" == "fish" ]]; then
-    echo -e "   ${GREEN}source .venv/bin/activate.fish${NC}"
-else
-    echo -e "   ${GREEN}source .venv/bin/activate${NC}"
-fi
 echo -e "   ${GREEN}raphael start${NC}"
 echo -e "Or run directly without activating the environment:"
 echo -e "   ${GREEN}.venv/bin/raphael start${NC}\n"

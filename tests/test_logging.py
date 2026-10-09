@@ -57,6 +57,9 @@ def test_concise_log_filter_keeps_conversation_and_problems_only():
         )
 
     assert concise.filter(record(logging.INFO, '🗣️ You: "hello"'))
+    assert concise.filter(record(logging.INFO, '⌨️ You: "hello"'))
+    assert concise.filter(record(logging.INFO, "Keyboard ready — type a message"))
+    assert concise.filter(record(logging.INFO, "[system]: Microphone muted."))
     assert concise.filter(record(logging.INFO, '🤖 RAPHAEL: "hi"'))
     assert concise.filter(record(logging.INFO, "Microphone active — ambient listening"))
     assert concise.filter(record(logging.INFO, "Chatterbox Turbo ready (pid=1)"))
