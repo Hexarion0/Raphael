@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import queue
 import subprocess
 import threading
+import time
 import uuid
 from collections.abc import Callable
 from pathlib import Path
@@ -35,6 +37,7 @@ class ChatterboxTurboWorker:
         *,
         startup_timeout: float = 180.0,
         min_free_vram_mib: int = 3000,
+        synthesis_timeout: float = 60.0,
     ) -> None:
         # Preserve virtualenv launchers: resolve() follows the venv's python symlink
         # to the base interpreter, which then cannot see venv site-packages.
@@ -44,6 +47,9 @@ class ChatterboxTurboWorker:
         self.reference = Path(reference).expanduser().resolve()
         self.reference_text = reference_text.strip()
         self.startup_timeout = startup_timeout
+        if not math.isfinite(synthesis_timeout) or synthesis_timeout <= 0:
+            raise ValueError("Synthesis timeout must be finite and positive")
+        self.synthesis_timeout = synthesis_timeout
         self.min_free_vram_mib = min_free_vram_mib
         self._process: subprocess.Popen[str] | None = None
         self._ready = threading.Event()
@@ -197,10 +203,14 @@ class ChatterboxTurboWorker:
             with self._write_lock:
                 process.stdin.write(json.dumps({"id": request_id, "text": text}) + "\n")
                 process.stdin.flush()
+            deadline = time.monotonic() + self.synthesis_timeout
             while not canceled():
                 try:
                     message = response.get(timeout=0.025)
                 except queue.Empty:
+                    if time.monotonic() >= deadline:
+                        self.close(force=True)
+                        raise ChatterboxWorkerError("Timed out synthesizing Chatterbox speech")
                     if process.poll() is not None:
                         raise ChatterboxWorkerError("Chatterbox worker exited during synthesis")
                     continue

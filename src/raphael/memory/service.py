@@ -273,6 +273,9 @@ class MemoryService:
             self.focus_key = None
             self.observe_topic(topic)
         item = self.store.get_fact(self.focus_key) if self.focus_key else None
+        if self.focus_key and item is None:
+            self.focus_key = None
+            return "I couldn't find a saved fact matching that. Which fact should I forget?"
         matches = [
             memory
             for memory in self.store.search_memories(

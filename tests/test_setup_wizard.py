@@ -7,6 +7,12 @@ from dotenv import dotenv_values
 from raphael import setup_wizard
 
 
+@pytest.fixture(autouse=True)
+def hidden_key_answers(monkeypatch):
+    """Use each test's input sequence for synthetic secret prompts as well."""
+    monkeypatch.setattr(setup_wizard, "getpass", lambda prompt: input(prompt))
+
+
 def test_selected_voice_persists_matching_engine(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     answers = iter(["", "", "", "2", "", ""])
@@ -20,6 +26,7 @@ def test_selected_voice_persists_matching_engine(tmp_path, monkeypatch):
     monkeypatch.setattr(setup_wizard, "TextToSpeech", tts)
     setup_wizard.run_setup_wizard()
     saved = dotenv_values(tmp_path / ".env")
+    assert (tmp_path / ".env").stat().st_mode & 0o777 == 0o600
     assert saved["TTS_VOICE"] == "en_US-amy-medium"
     assert saved["TTS_ENGINE"] == "piper"
     settings.cache_clear.assert_called_once()

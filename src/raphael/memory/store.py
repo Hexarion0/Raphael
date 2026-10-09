@@ -266,7 +266,25 @@ class MemoryStore:
                     )
                     memory_id = cursor.lastrowid
                     conn.execute("INSERT INTO memory_keys VALUES (?, ?);", (key, memory_id))
-                conn.execute("DELETE FROM forgotten_memories WHERE fact_key=?;", (key,))
+                forgotten = conn.execute(
+                    "SELECT patterns_json FROM forgotten_memories WHERE fact_key=?;", (key,),
+                ).fetchone()
+                if forgotten:
+                    # Re-authorize only this value, keeping unrelated old values private.
+                    authorized = {item.content.casefold()}
+                    if isinstance(item.metadata.get("value"), str):
+                        authorized.add(item.metadata["value"].strip().casefold())
+                    patterns = [
+                        pattern for pattern in json.loads(forgotten["patterns_json"])
+                        if pattern.casefold() not in authorized
+                    ]
+                    if patterns:
+                        conn.execute(
+                            "UPDATE forgotten_memories SET patterns_json=? WHERE fact_key=?;",
+                            (json.dumps(patterns), key),
+                        )
+                    else:
+                        conn.execute("DELETE FROM forgotten_memories WHERE fact_key=?;", (key,))
                 item.id = memory_id
                 return memory_id
 
@@ -283,6 +301,11 @@ class MemoryStore:
                     ).fetchone()
                     key = key_row["fact_key"] if key_row else f"record:{item.id}"
                     patterns = [item.content]
+                    forgotten = conn.execute(
+                        "SELECT patterns_json FROM forgotten_memories WHERE fact_key=?;", (key,),
+                    ).fetchone()
+                    if forgotten:
+                        patterns.extend(json.loads(forgotten["patterns_json"]))
                     value = item.metadata.get("value")
                     if value is None:
                         description = re.match(
@@ -306,7 +329,7 @@ class MemoryStore:
                     )
                     conn.execute(
                         "INSERT OR REPLACE INTO forgotten_memories VALUES (?, ?);",
-                        (key, json.dumps(patterns)),
+                        (key, json.dumps(list(dict.fromkeys(patterns)))),
                     )
                     deleted += conn.execute(
                         "DELETE FROM memories WHERE id=?;",

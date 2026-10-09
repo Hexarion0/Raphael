@@ -108,7 +108,9 @@ class ModelRouter:
         # 4. Default: Medium complexity
         return ComplexityLevel.MEDIUM, "Standard explanatory or multi-turn query", None
 
-    def route(self, prompt: str, *, purpose: str = "conversation") -> RoutingDecision:
+    def route(
+        self, prompt: str, *, purpose: str = "conversation", local_only: bool = False,
+    ) -> RoutingDecision:
         """Determine the optimal provider and model for a given prompt."""
         mark(f"{purpose}.routing_started")
         if purpose in {"summary", "speech_gate"}:
@@ -123,12 +125,12 @@ class ModelRouter:
             raise ValueError(f"Unknown routing purpose: {purpose}")
 
         # Route by complexity and provider availability
-        if override == "local":
+        if override == "local" or local_only:
             decision = RoutingDecision(
                 complexity=complexity,
                 provider_name="ollama",
                 model_name="llama3.2",
-                reason=reason,
+                reason=f"{reason} → Local context requires Ollama" if local_only else reason,
                 override_applied=override,
             )
         elif complexity == ComplexityLevel.SIMPLE:
@@ -206,7 +208,7 @@ class ModelRouter:
                 )
 
         if (
-            override != "local"
+            not local_only and override != "local"
             and not getattr(self.manager, decision.provider_name).is_configured()
         ):
             for candidate in ("nim", "groq", "openrouter", "ollama"):
@@ -245,7 +247,8 @@ class ModelRouter:
         routing_text = (
             self._routing_text(messages) if purpose == "conversation" else latest_user_text
         )
-        decision = self.route(routing_text, purpose=purpose)
+        local_only = self.requires_local(messages)
+        decision = self.route(routing_text, purpose=purpose, local_only=local_only)
 
         # Strip override command prefixes from messages if present
         clean_messages = self._clean_override_prefixes(messages)
@@ -254,6 +257,8 @@ class ModelRouter:
             "preferred_provider": decision.provider_name, "model": decision.model_name,
             "temperature": temperature, "max_tokens": max_tokens or 512,
         }
+        if local_only:
+            options["allowed_providers"] = ("ollama",)
 
         def collect(canceled: threading.Event | None) -> LLMResponse:
             started = time.monotonic()
@@ -288,7 +293,8 @@ class ModelRouter:
     ) -> Iterator[LLMStreamChunk]:
         """Route and stream chat completion tokens with automatic fallback."""
         mark("conversation.route_call_started")
-        decision = self.route(self._routing_text(messages))
+        local_only = self.requires_local(messages)
+        decision = self.route(self._routing_text(messages), local_only=local_only)
         clean_messages = self._clean_override_prefixes(messages)
 
         with self.priority.foreground():
@@ -299,7 +305,19 @@ class ModelRouter:
                 temperature=temperature,
                 max_tokens=max_tokens or 512,
                 cancel_event=cancel_event,
+                **({"allowed_providers": ("ollama",)} if local_only else {}),
             )
+
+    @staticmethod
+    def requires_local(messages: list[ChatMessage]) -> bool:
+        """Keep private context on Ollama, including continuations and summaries."""
+        return any(
+            message.local_only or (
+                message.role == "user"
+                and re.search(r"(?m)^\s*/local(?:\s|$)", message.content) is not None
+            )
+            for message in messages
+        )
 
     @staticmethod
     def _routing_text(messages: list[ChatMessage]) -> str:
@@ -321,7 +339,7 @@ class ModelRouter:
         for m in messages:
             if m.role == "user":
                 content = re.sub(r"^/(fast|strong|deep|local)(?:\s+|$)", "", m.content)
-                cleaned.append(ChatMessage(role=m.role, content=content))
+                cleaned.append(ChatMessage(role=m.role, content=content, local_only=m.local_only))
             else:
                 cleaned.append(m)
         return cleaned

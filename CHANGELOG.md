@@ -2,6 +2,19 @@
 
 ## Unreleased — 0.3.6 development
 
+- Enforce `/local` through reply fallback, running summaries, and ambient speech
+  classification, retaining the policy across summary persistence and restart.
+- Preserve unrelated facts when forgetting an absent topic, and keep old forgotten
+  values suppressed when a different value is saved under the same key.
+- Fix microphone stream replacement deadlocks and clean up failed stream starts.
+  Require detected wake evidence to interrupt playback in wake mode.
+- Expire pending persona edits and clear them on cancellation, farewell, mode
+  changes, or unrelated requests. Expose `WAKE_MODELS` and print activation steps
+  after custom wake training. Retry failed summaries without skipping dialogue.
+- Bound STT startup and Turbo response waits, validate audio configuration earlier,
+  hide API key entry, and restrict setup configuration files to owner access.
+- Add regression coverage and CI for Python 3.10/3.14, frontend tests, lint,
+  packaging, and an installed CLI smoke check.
 - Add breathing, orbiting particles, flowing ribbons, and distinct voice-state
   animations to the orb. Cache geometry calculations, batch canvas draws, cap
   high-DPI resolution, and reduce frame rates while waiting and speaking.

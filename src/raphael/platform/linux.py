@@ -213,9 +213,9 @@ class LinuxAudioBackend(AudioBackend):
     ) -> None:
         """Start non-blocking continuous input stream."""
         with self._stream_lock:
-            if self._stream is not None and self._stream.active:
-                logger.warning("Audio stream is already active. Stopping existing stream.")
-                self.stop_stream()
+            if self._stream is not None:
+                logger.info("Replacing existing audio stream.")
+                self._stop_stream_locked()
 
             resolved_device = self.resolve_device(device, is_input=True)
 
@@ -234,7 +234,11 @@ class LinuxAudioBackend(AudioBackend):
                 blocksize=blocksize,
                 callback=_internal_callback,
             )
-            self._stream.start()
+            try:
+                self._stream.start()
+            except BaseException:
+                self._stop_stream_locked()
+                raise
             logger.info(
                 "Audio stream started on device %s at %d Hz.",
                 resolved_device,
@@ -244,16 +248,21 @@ class LinuxAudioBackend(AudioBackend):
     def stop_stream(self) -> None:
         """Stop and close active audio stream."""
         with self._stream_lock:
-            if self._stream is not None:
+            self._stop_stream_locked()
+
+    def _stop_stream_locked(self) -> None:
+        """Close the current stream while the caller owns the lifecycle lock."""
+        stream, self._stream = self._stream, None
+        if stream is not None:
+            try:
                 try:
-                    if self._stream.active:
-                        self._stream.stop()
-                    self._stream.close()
-                except Exception as err:
-                    logger.error("Error closing audio stream: %s", err)
+                    if stream.active:
+                        stream.stop()
                 finally:
-                    self._stream = None
-                    logger.info("Audio stream stopped.")
+                    stream.close()
+            except Exception as err:
+                logger.error("Error closing audio stream: %s", err)
+            logger.info("Audio stream stopped.")
 
     def is_streaming(self) -> bool:
         """Check if stream is active."""

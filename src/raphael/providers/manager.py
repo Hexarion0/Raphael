@@ -84,6 +84,7 @@ class ProviderManager:
         model: str | None = None,
         temperature: float = 0.7,
         max_tokens: int = 1024,
+        allowed_providers: tuple[str, ...] | None = None,
         **kwargs: Any,
     ) -> LLMResponse:
         """Send prompt attempting preferred provider first with automatic fallback."""
@@ -97,6 +98,8 @@ class ProviderManager:
         last_error: Exception | None = None
 
         for provider_name in order:
+            if allowed_providers is not None and provider_name not in allowed_providers:
+                continue
             provider = self.providers[provider_name]
             if not provider.is_configured():
                 logger.debug("Skipping provider '%s' (not configured).", provider_name)
@@ -138,6 +141,7 @@ class ProviderManager:
         temperature: float = 0.7,
         max_tokens: int = 1024,
         cancel_event: Event | None = None,
+        allowed_providers: tuple[str, ...] | None = None,
         **kwargs: Any,
     ) -> Iterator[LLMStreamChunk]:
         """Stream response from the first functioning provider."""
@@ -149,6 +153,8 @@ class ProviderManager:
                 order.append(name)
 
         for provider_name in order:
+            if allowed_providers is not None and provider_name not in allowed_providers:
+                continue
             if cancel_event is not None and cancel_event.is_set():
                 return
             provider = self.providers[provider_name]

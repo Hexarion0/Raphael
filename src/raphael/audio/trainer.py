@@ -1,5 +1,6 @@
 """Voice sample recorder and custom wake word model trainer for personalized voice tuning."""
 
+import json
 import time
 from pathlib import Path
 
@@ -195,5 +196,6 @@ def train_custom_wakeword(
 
     logger.info("Personalized wake word model saved to: %s", output_target)
     print(f"\n🎉 Successfully created personalized wake word model: '{output_target}'")
-    print("RAPHAEL is now calibrated to your voice!")
+    print("To activate it, set this JSON list in .env, then restart RAPHAEL:")
+    print(f"WAKE_MODELS={json.dumps([str(output_target)])}")
     return output_target

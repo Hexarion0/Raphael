@@ -217,6 +217,7 @@ def main() -> int:
             retry_model=settings.audio.stt_retry_model,
             retry_min_free_mb=settings.audio.stt_retry_min_free_mb,
             wake_phrase=settings.audio.wake_word,
+            load_timeout=settings.audio.stt_startup_timeout_seconds,
         )
         show_ai_transcripts = (
             settings.audio.show_ai_transcripts
@@ -310,6 +311,7 @@ def main() -> int:
         )
         _in_followup = [False]  # mutable flag shared across calls
         persona_change_pending = [False]
+        persona_change_deadline = [0.0]
 
         def on_wake(info: dict):
             logger.info("🎯 Wake detected! Details: %s", info)
@@ -412,6 +414,8 @@ def main() -> int:
 
             if not current():
                 return False
+            if persona_change_pending[0] and time.monotonic() > persona_change_deadline[0]:
+                persona_change_pending[0] = False
             user_text = text.strip()
             raw = wake_info.get("stt_raw_text", user_text)
             earlier_fragments = [] if typed else linked_fragments(wake_info)
@@ -441,11 +445,7 @@ def main() -> int:
                         decision = ambient_context.decide(
                             user_text or (raw if wake_info.get("stt_needs_repeat") else ""),
                             router,
-                            [
-                                # Only the last exchange helps identify a follow-up.
-                                ChatMessage(turn.role, turn.content)
-                                for turn in conv_manager.get_recent_turns(limit=4)
-                            ],
+                            conv_manager.get_gate_messages(),
                             started_at=wake_info.get("speech_started_at"),
                             verified_wake=bool(wake_info.get("wake_verified")),
                             during_reply=bool(wake_info.get("during_reply")),
@@ -465,12 +465,14 @@ def main() -> int:
             else:
                 mark("speech_gate_finished", reason="disabled")
             if wake_info.get("stt_needs_repeat"):
+                persona_change_pending[0] = False
                 memory_service.cancel_proposal()
                 actions.cancel_pending()
                 logger.info("Speech was unclear; asking for a repeat instead of sending a guess.")
                 say("I didn't catch that clearly. Could you say it again?")
                 return True
             if not user_text:
+                persona_change_pending[0] = False
                 memory_service.cancel_proposal()
                 actions.cancel_pending()
                 logger.info("🗣️ (No speech detected after wake — returning to standby.)")
@@ -496,6 +498,7 @@ def main() -> int:
                 cleaned_query, re.I,
             )
             if mode_off or mode_on:
+                persona_change_pending[0] = False
                 memory_service.cancel_proposal()
                 actions.cancel_pending()
                 mark("local_intent_resolved", intent="listening_mode")
@@ -529,6 +532,7 @@ def main() -> int:
 
             # Check if user requested immediate stop / cancel
             if _stop_re.search(cleaned_query):
+                persona_change_pending[0] = False
                 memory_service.cancel_proposal()
                 actions.cancel_pending()
                 mark("local_intent_resolved", intent="stop")
@@ -541,6 +545,8 @@ def main() -> int:
                 return False
 
             # Guessed follow-up intent or uncertain recognition must not write facts.
+            if is_farewell(cleaned_query):
+                persona_change_pending[0] = False
             reliable = wake_info.get("stt_confidence", 1.0) >= settings.audio.stt_retry_confidence
             allow_memory = (
                 not restored_fragments and reliable and (decision is None or decision.explicit)
@@ -569,6 +575,7 @@ def main() -> int:
                 action, preference = persona_request
                 if action == "ask":
                     persona_change_pending[0] = True
+                    persona_change_deadline[0] = time.monotonic() + 60.0
                     acknowledgement = "Yes. What would you like me to change about my style?"
                     conv_manager.add_turn(role="user", content=cleaned_query)
                     conv_manager.add_turn(
@@ -598,6 +605,7 @@ def main() -> int:
                 else:
                     say("I couldn't update my persona file, so my style hasn't changed.")
                 return True
+            persona_change_pending[0] = False
             if not allow_memory:
                 memory_service.cancel_proposal()
             memory_reply = memory_service.handle(cleaned_query) if allow_memory else None
@@ -881,10 +889,7 @@ def main() -> int:
                 decision = ambient_context.decide(
                     text,
                     router,
-                    [
-                        ChatMessage(turn.role, turn.content)
-                        for turn in conv_manager.get_recent_turns(limit=4)
-                    ],
+                    conv_manager.get_gate_messages(),
                     started_at=info.get("speech_started_at"),
                     verified_wake=bool(info.get("wake_verified")),
                     during_reply=bool(info.get("during_reply")),
@@ -959,7 +964,7 @@ def main() -> int:
                     "first startup can take several seconds."
                 )
                 warmup_started = time.monotonic()
-                if stt.wait_ready(timeout=120):
+                if stt.wait_ready(timeout=settings.audio.stt_startup_timeout_seconds):
                     warmed = tts.warmup()
                     logger.info(
                         "Turbo startup preparation finished in %.2fs (%s).",
@@ -968,12 +973,15 @@ def main() -> int:
                     )
                 else:
                     logger.warning(
-                        "STT did not become ready within 120s; starting listener and "
+                        "STT did not become ready; starting listener and "
                         "deferring Turbo initialization."
                     )
             loop.start()
             def stop_keyboard_reply() -> None:
                 loop.cancel_response()
+                persona_change_pending[0] = False
+                memory_service.cancel_proposal()
+                actions.cancel_pending()
                 pending_speech.clear()
                 unfinished_request[0] = {}
 

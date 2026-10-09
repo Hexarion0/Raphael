@@ -23,6 +23,13 @@ words or long messages alone do not select the complex model; implementation,
 debugging, architecture, and explicit `/strong` requests do. `/fast` and `/local`
 remain available, and continuation requests retain the preceding task's routing.
 
+`/local` requires Ollama and never falls back to cloud providers. After a local
+request, follow-up replies, summaries, and ambient intent classification for that
+persisted conversation also require Ollama, even after context trimming or restart.
+Clearing the conversation resets the restriction. A local
+provider outage reports failure or defers the background request. This setting
+controls provider routing; it does not disable microphone capture or persistence.
+
 ## Personality and memory
 
 The voice persona is a warm, mature, confident feminine companion: playful in
@@ -47,6 +54,8 @@ RAPHAEL asks what to change, then saves your next clear style instruction. Say
 “reset your persona” to remove RAPHAEL's managed adjustment while keeping the rest
 of `persona.txt` intact. The initial request must be reliably transcribed and
 explicitly address RAPHAEL; the follow-up must also be reliable.
+The pending edit expires after 60 seconds. Cancellation, farewell, a listening
+mode change, or an unrelated question clears it; `/stop` also clears pending edits.
 Missing, unreadable, invalid UTF-8, or oversized files fall back to the built-in
 personality. Keep the file under 32 KiB; `#` comment lines are ignored. These
 preferences shape AI replies; they do not change TTS voices, STT models, local
@@ -67,6 +76,9 @@ confirmation. `Raphael, forget my favorite game` removes the saved fact. Forgett
 and masks its known wording and previous values in history sent to the model,
 including after a restart. Archived conversation text remains in SQLite;
 paraphrases outside the known wording can still require explicit cleanup.
+Forgetting a supported topic that has no saved fact leaves other facts intact.
+Saving a new value keeps older forgotten values suppressed unless you explicitly
+save that same value again.
 Conversation context is scoped to the persona version. The companion persona
 starts a separate context while the legacy desktop chat stays archived in SQLite.
 Saved facts and preferences remain shared; conversation summaries are excluded
@@ -91,6 +103,11 @@ and cuDNN 9 are required by
 Startup runs a short silent inference before reporting CUDA STT ready, because
 these libraries may not load until the first transcription. If it fails, the
 startup log reports the CPU fallback before you speak.
+`STT_STARTUP_TIMEOUT_SECONDS=120` bounds waiting for command-model startup.
+Loading errors do not report readiness; a request that times out can be retried
+after loading completes. `TTS_SYNTHESIS_TIMEOUT_SECONDS=60` bounds waiting for a
+Turbo synthesis response and terminates an unresponsive worker so Piper can take
+over. These deadlines do not interrupt native Whisper or Piper inference.
 Keep the smaller command model when Turbo or other work shares limited GPU memory.
 Both launch commands run the same application. The script selects `.venv/bin/python`,
 switches to the project folder, and prepares `LD_LIBRARY_PATH`. Running
@@ -150,6 +167,10 @@ raise it if noise causes excessive checks. `WAKE_WINDOW_SECONDS=3.0` controls
 retained greeting audio. Whisper's VAD and transcript confidence checks still
 filter wake candidates. `WAKE_THRESHOLD` applies to openWakeWord models, not the
 Whisper keyword spotter. Wait for the `Wake keyword spotter ready` log on startup.
+After `raphael train-wake`, set `WAKE_MODELS` to the JSON list printed by training
+(for example, `WAKE_MODELS=["models/custom/hey_raphael.onnx"]`) and restart.
+An empty list keeps the Whisper keyword spotter. Audio capture currently supports
+only 16 kHz mono; unsupported rates or channel counts fail during configuration.
 `STT ready` reports that command transcription has loaded. Development mode (`raphael start dev`) shows audio
 being transcribed, STT word count/confidence, quality retries, superseded speech,
 and each ambient reply/silence reason. DEBUG logs include raw candidates, including
@@ -205,6 +226,8 @@ Summaries run separately
 from voice replies, wait for at least six new older messages, process bounded
 batches, and resume across restarts. Context keeps a bounded tail of messages
 awaiting a summary so batching does not immediately lose the preceding exchange.
+Provider failures and empty summaries leave the cursor unchanged for a later
+retry. The providerless fallback advances only through the turns it describes.
 Clearing a conversation also removes its summaries. Sign-off commands such as `goodbye` end follow-up mode;
 questions that merely contain farewell words do not.
 

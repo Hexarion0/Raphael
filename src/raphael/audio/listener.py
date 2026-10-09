@@ -364,17 +364,12 @@ class WakeListenerLoop:
                     self._interrupt_speech_samples >=
                     round(self.sample_rate * self.barge_in_speech_seconds)
                 )
-            loud_interrupt = (
-                not self.ambient
-                and self.barge_in_mode == "wake"
-                and VoiceRecorder.calculate_rms(audio) >= self.barge_in_threshold_rms
-            )
             if speech_interrupt and not trigger:
                 self._start_speech_recording()
                 self._notify(self.on_barge_in)
                 self._interrupt_speech_samples = 0
                 return
-            if loud_interrupt or trigger:
+            if trigger:
                 self._stop_output()
                 self._last_wake_info = dict(trigger) if trigger else {}
                 self._last_wake_info["ambient"] = self.ambient

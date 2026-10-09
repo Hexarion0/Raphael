@@ -1,6 +1,7 @@
 """Interactive setup and configuration wizard for RAPHAEL."""
 
 import json
+from getpass import getpass
 from pathlib import Path
 
 from dotenv import dotenv_values, set_key, unset_key
@@ -70,7 +71,7 @@ def run_setup_wizard() -> None:
         nim_prompt = f"NVIDIA NIM API Key [{preview}]: "
     else:
         nim_prompt = "NVIDIA NIM API Key: "
-    nim_input = input(nim_prompt).strip()
+    nim_input = getpass(nim_prompt).strip()
     if nim_input:
         current_env["NIM_API_KEY"] = nim_input
     elif not current_nim:
@@ -81,7 +82,7 @@ def run_setup_wizard() -> None:
         groq_prompt = f"Groq API Key (Optional) [{current_groq[:6]}...]: "
     else:
         groq_prompt = "Groq API Key (Optional): "
-    groq_input = input(groq_prompt).strip()
+    groq_input = getpass(groq_prompt).strip()
     if groq_input:
         current_env["GROQ_API_KEY"] = groq_input
 
@@ -90,7 +91,7 @@ def run_setup_wizard() -> None:
         or_prompt = f"OpenRouter API Key (Optional) [{current_or[:6]}...]: "
     else:
         or_prompt = "OpenRouter API Key (Optional): "
-    or_input = input(or_prompt).strip()
+    or_input = getpass(or_prompt).strip()
     if or_input:
         current_env["OPENROUTER_API_KEY"] = or_input
 
@@ -172,6 +173,7 @@ def run_setup_wizard() -> None:
     for key, value in defaults.items():
         current_env.setdefault(key, value)
     if not env_path.exists():
+        env_path.touch(mode=0o600, exist_ok=False)
         env_path.write_text("# RAPHAEL Configuration File\n", encoding="utf-8")
     for key in original_keys.keys() - current_env.keys():
         if key in {"AUDIO_INPUT_DEVICE", "AUDIO_OUTPUT_DEVICE"}:
@@ -180,6 +182,7 @@ def run_setup_wizard() -> None:
         original_key = original_keys.get(key, key)
         if original_env.get(original_key) != value:
             set_key(env_path, original_key, value, quote_mode="always")
+    env_path.chmod(0o600)
     print("✅ Configuration successfully saved to .env")
 
     # Clear cached settings so changes take effect immediately

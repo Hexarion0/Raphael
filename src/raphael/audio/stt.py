@@ -81,6 +81,7 @@ class SpeechToText:
         retry_model: str | None = None,
         wake_phrase: str = "hey raphael",
         retry_min_free_mb: int = 2048,
+        load_timeout: float = 120.0,
     ) -> None:
         if not 0.0 <= min_confidence <= 1.0 or not 0.0 <= retry_confidence <= 1.0:
             raise ValueError("STT confidence thresholds must be between zero and one")
@@ -93,6 +94,9 @@ class SpeechToText:
         self.retry_confidence = retry_confidence
         self.retry_model_size = retry_model or None
         self.retry_min_free_mb = retry_min_free_mb
+        if not math.isfinite(load_timeout) or load_timeout <= 0:
+            raise ValueError("STT loading timeout must be finite and positive")
+        self.load_timeout = load_timeout
         self.wake_phrase = wake_phrase
         self._retry_model: WhisperModel | None = None
         self._retry_blocked_devices: set[str] = set()
@@ -120,12 +124,14 @@ class SpeechToText:
             self._ready.set()
 
     def is_ready(self) -> bool:
-        """Return True if the model has finished loading."""
-        return self._ready.is_set()
+        """Return True only after the model has loaded successfully."""
+        return self._ready.is_set() and self._load_error is None and self.model is not None
 
     def wait_ready(self, timeout: float | None = None) -> bool:
         """Block until model is loaded (or timeout seconds). Returns True if loaded."""
-        return self._ready.wait(timeout=timeout)
+        return self._ready.wait(
+            timeout=self.load_timeout if timeout is None else timeout,
+        ) and self.is_ready()
 
     def _load_model(self, model_size: str, device: str, compute_type: str) -> WhisperModel:
         # Resolve 'auto' device
@@ -245,7 +251,8 @@ class SpeechToText:
         # Wait for background model load if it hasn't finished yet
         if not self._ready.is_set():
             logger.info("⏳ STT model still loading — waiting...")
-            self._ready.wait()
+            if not self._ready.wait(timeout=self.load_timeout):
+                raise TimeoutError("STT model is still loading; please try again later")
         if self._load_error or self.model is None:
             raise RuntimeError(f"STT model failed to load: {self._load_error}")
 

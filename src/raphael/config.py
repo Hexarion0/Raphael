@@ -41,6 +41,7 @@ class MemoryConfig(BaseModel):
     )
     max_short_term_turns: int = Field(
         default=10,
+        ge=1,
         description="Maximum turns of conversation to keep in short-term context",
     )
 
@@ -84,6 +85,7 @@ class AudioConfig(BaseModel):
     wake_word: str = Field(default="hey raphael", description="Wake word trigger phrase")
     wake_threshold: float = Field(
         default=0.5,
+        ge=0.0, le=1.0,
         description="Wake word detection threshold (0.0 - 1.0)",
     )
     wake_cooldown: float = Field(
@@ -119,6 +121,7 @@ class AudioConfig(BaseModel):
         default="en",
         description="Primary language code for STT transcription",
     )
+    stt_startup_timeout_seconds: float = Field(default=120.0, ge=0.1, le=300)
     stt_beam_size: int = Field(default=3, ge=1, le=10)
     stt_min_confidence: float = Field(default=0.4, ge=0.0, le=1.0)
     stt_retry_confidence: float = Field(default=0.55, ge=0.0, le=1.0)
@@ -145,12 +148,14 @@ class AudioConfig(BaseModel):
     tts_chatterbox_python: str = Field(default="data/voice/envs/clone/bin/python")
     tts_min_free_vram_mb: int = Field(default=3000, ge=0, le=6144)
     tts_audio_queue_size: int = Field(default=2, ge=1, le=4)
+    tts_synthesis_timeout_seconds: float = Field(default=60.0, ge=0.1, le=300)
     tts_playback_latency: float = Field(
         default=0.12, gt=0, le=1,
         description="Output buffer latency in seconds to tolerate audio scheduling delays",
     )
     tts_speed: float = Field(
         default=1.0,
+        gt=0.0, le=3.0,
         description="Speech synthesis speed multiplier (1.0 = normal)",
     )
     tts_enabled: bool = Field(
@@ -159,8 +164,8 @@ class AudioConfig(BaseModel):
     )
     tts_streaming: bool = Field(default=True)
     show_ai_transcripts: bool = Field(default=False)
-    sample_rate: int = Field(default=16000, description="Audio sample rate in Hz")
-    channels: int = Field(default=1, description="Audio channel count (1 for mono)")
+    sample_rate: int = Field(default=16000, ge=16000, le=16000, description="16 kHz audio")
+    channels: int = Field(default=1, ge=1, le=1, description="Mono audio")
     input_device: int | str | None = Field(
         default=None,
         description="Microphone device index or substring name",
@@ -208,11 +213,12 @@ class Settings(BaseSettings):
 
     # Memory & Persistence settings
     memory_db_path: str = Field(default="data/raphael.db")
-    memory_max_short_term_turns: int = Field(default=10)
+    memory_max_short_term_turns: int = Field(default=10, ge=1)
 
     # Audio & Voice settings
     wake_word: str = Field(default="hey raphael")
-    wake_threshold: float = Field(default=0.5)
+    wake_models: list[str] = Field(default_factory=list)
+    wake_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
     wake_cooldown: float = Field(default=2.0)
     wake_stt_model: str = Field(default="base.en")
     wake_min_rms: float = Field(default=0.006, gt=0.0, le=0.05)
@@ -227,6 +233,7 @@ class Settings(BaseSettings):
     stt_device: str = Field(default="cpu")
     stt_compute_type: str = Field(default="int8")
     stt_language: str = Field(default="en")
+    stt_startup_timeout_seconds: float = Field(default=120.0, ge=0.1, le=300)
     stt_beam_size: int = Field(default=3, ge=1, le=10)
     stt_min_confidence: float = Field(default=0.4, ge=0.0, le=1.0)
     stt_retry_confidence: float = Field(default=0.55, ge=0.0, le=1.0)
@@ -242,13 +249,14 @@ class Settings(BaseSettings):
     tts_chatterbox_python: str = Field(default="data/voice/envs/clone/bin/python")
     tts_min_free_vram_mb: int = Field(default=3000, ge=0, le=6144)
     tts_audio_queue_size: int = Field(default=2, ge=1, le=4)
+    tts_synthesis_timeout_seconds: float = Field(default=60.0, ge=0.1, le=300)
     tts_playback_latency: float = Field(default=0.12, gt=0, le=1)
-    tts_speed: float = Field(default=1.0)
+    tts_speed: float = Field(default=1.0, gt=0.0, le=3.0)
     tts_enabled: bool = Field(default=True)
     tts_streaming: bool = Field(default=True)
     show_ai_transcripts: bool = Field(default=False)
-    audio_sample_rate: int = Field(default=16000)
-    audio_channels: int = Field(default=1)
+    audio_sample_rate: int = Field(default=16000, ge=16000, le=16000)
+    audio_channels: int = Field(default=1, ge=1, le=1)
     audio_input_device: int | str | None = Field(default=None)
     audio_output_device: int | str | None = Field(default=None)
 
@@ -293,6 +301,7 @@ class Settings(BaseSettings):
         """Structured audio configuration."""
         return AudioConfig(
             wake_word=self.wake_word,
+            wake_models=self.wake_models,
             wake_threshold=self.wake_threshold,
             wake_cooldown=self.wake_cooldown,
             wake_stt_model=self.wake_stt_model,
@@ -308,6 +317,7 @@ class Settings(BaseSettings):
             stt_device=self.stt_device,
             stt_compute_type=self.stt_compute_type,
             stt_language=self.stt_language,
+            stt_startup_timeout_seconds=self.stt_startup_timeout_seconds,
             stt_beam_size=self.stt_beam_size,
             stt_min_confidence=self.stt_min_confidence,
             stt_retry_confidence=self.stt_retry_confidence,
@@ -323,6 +333,7 @@ class Settings(BaseSettings):
             tts_chatterbox_python=self.tts_chatterbox_python,
             tts_min_free_vram_mb=self.tts_min_free_vram_mb,
             tts_audio_queue_size=self.tts_audio_queue_size,
+            tts_synthesis_timeout_seconds=self.tts_synthesis_timeout_seconds,
             tts_playback_latency=self.tts_playback_latency,
             tts_speed=self.tts_speed,
             tts_enabled=self.tts_enabled,

@@ -11,6 +11,7 @@ from typing import Any, Literal
 from raphael.conversation import interpret_clock_address, is_direct_address
 from raphael.logging import get_logger
 from raphael.providers.base import ChatMessage
+from raphael.providers.router import ModelRouter
 
 logger = get_logger("audio.ambient")
 
@@ -227,7 +228,16 @@ class AmbientConversation:
                         "negations, memory commands, or new intentions. Otherwise use an "
                         "empty interpretation. Do not answer the speech itself.",
                     ),
-                    ChatMessage("user", json.dumps(payload, ensure_ascii=False)),
+                    ChatMessage(
+                        "user", json.dumps(payload, ensure_ascii=False),
+                        local_only=ModelRouter.requires_local([
+                            *dialogue, *recent_dialogue, ChatMessage("user", text),
+                            *[
+                                ChatMessage("user", fragment)
+                                for fragment in unfinished_request or []
+                            ],
+                        ]),
+                    ),
                 ],
                 temperature=0,
                 max_tokens=160,

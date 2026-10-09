@@ -12,6 +12,7 @@ class ChatMessage:
 
     role: str  # "system", "user", "assistant"
     content: str
+    local_only: bool = False  # Application policy; never serialized to a provider.
 
     def to_dict(self) -> dict[str, str]:
         return {"role": self.role, "content": self.content}

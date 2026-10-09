@@ -207,6 +207,7 @@ class TextToSpeech:
             reference,
             transcript.read_text(encoding="utf-8"),
             min_free_vram_mib=self.min_free_vram_mib,
+            synthesis_timeout=get_settings().audio.tts_synthesis_timeout_seconds,
         )
         return self._chatterbox
 

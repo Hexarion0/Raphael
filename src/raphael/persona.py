@@ -55,11 +55,31 @@ def parse_persona_request(text: str, *, pending: bool = False) -> tuple[str, str
     if not match:
         if not pending:
             return None
+        if "?" in text or re.match(
+            r"^(?:what|why|when|where|who|how|which|can|could|would|do|does|is|are)\b",
+            clean, re.I,
+        ):
+            return None
         preference = re.sub(
             r"^(?:i(?:'d| would) like you to |i want you to |please )", "", clean, flags=re.I
         ).strip()
         preference = re.sub(r"^(?:be|act|sound|speak|talk)\s+", "", preference, flags=re.I)
         if len(preference) < 8 or len(preference) > 300:
+            return None
+        # A pending prompt authorizes style descriptions, not arbitrary next turns.
+        # Other phrasing can still use the explicit "change your style to ..." form.
+        if not re.match(
+            r"^(?:(?:a little|a bit|much|slightly|very|more|less)\s+)*"
+            r"(?:curious|playful|calm|calmer|warm|warmer|friendly|friendlier|gentle|gentler|"
+            r"patient|formal|informal|casual|concise|brief|shorter|longer|direct|honest|"
+            r"thoughtful|supportive|witty|funny|serious|expressive|natural|plainspoken|"
+            r"affectionate|confident|professional|relaxed|energetic|empathetic|sarcastic|"
+            r"humorous|talkative|quiet|reserved)\b|"
+            r"^(?:use|give|keep)\s+(?:your\s+)?"
+            r"(?:shorter|longer|brief|concise|natural|simple|plain)\s+"
+            r"(?:replies|responses|answers|language|wording|sentences)\b",
+            preference, re.I,
+        ):
             return None
     else:
         preference = match.group(1).strip()

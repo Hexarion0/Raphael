@@ -155,8 +155,12 @@ def test_wake_listener_loop_state_transitions():
 
 
 def test_wake_listener_barge_in_interruption():
-    """Verify that speech during TTS playback triggers immediate barge-in stop."""
+    """Verify a detected wake during playback triggers immediate barge-in stop."""
     backend = MockAudioBackend()
+    detector = SimpleNamespace(
+        process_frame=lambda frame: {"wake_phrase": "hey raphael"},
+        reset=lambda **kwargs: None,
+    )
 
     class MockTTS:
         def __init__(self):
@@ -173,7 +177,7 @@ def test_wake_listener_barge_in_interruption():
     mock_tts = MockTTS()
     loop = WakeListenerLoop(
         audio_backend=backend,
-        detector=WakeWordDetector(enable_whisper_spotter=False),
+        detector=detector,
         tts=mock_tts,
         barge_in=True,
         barge_in_threshold_rms=0.01,
