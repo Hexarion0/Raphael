@@ -16,7 +16,13 @@ from piper.download_voices import download_voice
 from raphael.audio.alignment import CharacterTimeline, character_timeline, estimated_timeline
 from raphael.audio.chatterbox_worker import ChatterboxTurboWorker, ChatterboxWorkerError
 from raphael.audio.native import sd
-from raphael.audio.speech_events import SpeechEvent, split_speech_event, strip_speech_events
+from raphael.audio.speech_events import (
+    SpeechEvent,
+    SpeechEventLimiter,
+    SpeechExpressiveness,
+    split_speech_event,
+    strip_speech_events,
+)
 from raphael.config import get_settings, normalize_audio_device
 from raphael.conversation import strip_internal_reply_notes
 from raphael.logging import get_logger
@@ -79,12 +85,18 @@ class TextToSpeech:
         min_free_vram_mib: int | None = None,
         audio_queue_size: int | None = None,
         playback_latency: float | None = None,
+        expressiveness: SpeechExpressiveness | None = None,
     ) -> None:
         settings = get_settings().audio
 
         self.voice_name = voice_name if voice_name is not None else settings.tts_voice
         raw_engine = engine if engine is not None else settings.tts_engine
         self.engine = resolve_tts_engine(self.voice_name, raw_engine)
+        self.expressiveness = (
+            expressiveness if expressiveness is not None else settings.tts_expressiveness
+        )
+        if self.expressiveness not in {"expressive", "natural", "off"}:
+            raise ValueError("expressiveness must be expressive, natural, or off")
 
         self.models_dir = Path(models_dir)
         self.speed = speed if speed is not None else settings.tts_speed
@@ -216,14 +228,16 @@ class TextToSpeech:
     ) -> tuple[np.ndarray, int] | None:
         """Generate with cached Turbo conditionals; latch failures into local Piper fallback."""
         event_text, spoken_text = split_speech_event(text)
-        if not spoken_text:
+        # Turbo accepts inline and standalone events. Piper must receive only words.
+        model_text = f"{event_text} {spoken_text}".strip()
+        spoken_text = strip_speech_events(spoken_text)
+        if not model_text:
             return None
         if self._chatterbox_failed:
-            return self._synthesize_piper_fallback(spoken_text)
+            return self._synthesize_piper_fallback(spoken_text) if spoken_text else None
         canceled = getattr(self._synthesis_timing, "cancelled", lambda: False)
         try:
             worker = self._load_chatterbox_worker()
-            model_text = f"{event_text} {spoken_text}".strip()
             result = worker.synthesize(model_text, canceled=canceled)
             if result is None:
                 return None
@@ -239,7 +253,7 @@ class TextToSpeech:
             if self._chatterbox is not None:
                 self._chatterbox.close(force=True)
                 self._chatterbox = None
-            return self._synthesize_piper_fallback(spoken_text)
+            return self._synthesize_piper_fallback(spoken_text) if spoken_text else None
 
     def warmup(self) -> bool:
         """Load the cached voice in the background without synthesizing placeholder speech."""
@@ -373,7 +387,7 @@ class TextToSpeech:
         if not self.enabled:
             return None
 
-        clean_text = self.clean_text_for_speech(text)
+        clean_text = SpeechEventLimiter(self.expressiveness).apply(self.clean_text_for_speech(text))
         if not clean_text:
             return None
 

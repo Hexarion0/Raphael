@@ -338,6 +338,21 @@ It accepts no shell commands, paths, URLs, or flags. In ambient mode, launching
 requires a direct address. A launch acknowledgement means the process was started;
 it does not confirm that a window appeared. See [action development](actions.md).
 
+## Expressive voice
+
+With the custom Turbo voice selected, RAPHAEL can chuckle at a joke, sigh with relief,
+gasp at a surprise, or groan at a playful frustration. The voice prompt also encourages
+natural pauses and emotional wording that fits the conversation. Effects are optional;
+they do not appear in captions or newly saved dialogue.
+
+Set `TTS_EXPRESSIVENESS=expressive` in `.env` for up to two vocal cues per reply (the
+default), `natural` for at most one, or `off` for none. Restart after changing it.
+Piper uses the spoken phrasing but cannot render Turbo's effects. `[giggle]` maps to
+`[chuckle]`; `[moan]` maps to `[groan]`, an approximation. For example, a spoken reply
+can use `[chuckle] You got me.` or `Oh! [groan] Not again.`
+See [Turbo voice details](chatterbox-turbo-integration.md) for the supported events
+and local listening benchmark. The setting controls cue frequency, not emotion intensity.
+
 ## Streaming replies and shared GPU use
 
 `TTS_STREAMING=true` (the default) connects provider tokens to sentence-sized speech.

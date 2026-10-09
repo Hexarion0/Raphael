@@ -263,6 +263,10 @@ def main() -> int:
         run_case("03 Long response", long_response)
         run_case("04 [chuckle]", "[chuckle] I had a feeling you would say that.")
         run_case("05 [sigh]", "[sigh] You're still awake. You should probably get some rest soon.")
+        run_case("05a Inline [giggle]", "Oh! [giggle] You got me.")
+        run_case("05b [moan] alias", "[moan] Not again. We can fix this.")
+        run_case("05c Event budget", "[chuckle] Fair enough. [sigh] Let's try again. "
+                 "[groan] Same problem.")
         run_case("06 Rapid request one", "Of course.")
         run_case("07 Rapid request two", "Would you like me to take care of that for you?")
         run_case("08 User interruption", "I have checked the system. Everything is operating "

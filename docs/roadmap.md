@@ -57,6 +57,8 @@ this section rather than silently marking later milestones complete.
 - [x] Time/date answers without an AI request.
 - [x] Provider fallback before visible output; no splicing after a partial answer.
 - [x] Piper speech, persistent Turbo worker, bounded sentence queues and interruption.
+- [x] Contextual vocal cues, inline placement, giggle/moan aliases, and adjustable cue
+      frequency; plain captions/history and Piper fallback, with regression coverage.
 - [x] Playback captions; native Piper timing with duration estimates when unavailable.
 - [x] Foreground voice requests take priority over background summaries.
 - [x] Concise normal console and explicit development diagnostics.
@@ -189,8 +191,10 @@ Opening the Discord desktop app is already implemented; a Discord messaging bot 
 - [ ] Supply useful estimates to conversation generation without overreacting.
 - [ ] Evaluate across speakers, microphones, noise, sarcasm, and gaming audio.
 
-Turbo's optional vocal event markers and conversational personality are existing
-features; they are not an acoustic mood classifier.
+Turbo's contextual vocal event markers, adjustable cue frequency, and conversational
+personality are existing features; they are not an acoustic mood classifier. The moan
+alias renders a native groan, not a separately trained moan. Live listening still needs
+to judge the sound and timing of effects in real conversations.
 
 ## Desktop integration and Windows — v0.8
 

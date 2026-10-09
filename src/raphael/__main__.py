@@ -195,7 +195,11 @@ def main() -> int:
             WakeListenerLoop,
             WakeWordDetector,
         )
-        from raphael.audio.speech_events import speech_event_instruction, strip_speech_events
+        from raphael.audio.speech_events import (
+            speech_event_instruction,
+            strip_speech_events,
+            voice_delivery_instruction,
+        )
 
         logger.info("Initializing wake-word, TTS, and STT engines (STT loads in background)...")
         detector = WakeWordDetector(
@@ -230,6 +234,7 @@ def main() -> int:
             speed=settings.audio.tts_speed,
             output_device=settings.audio.output_device,
             enabled=settings.audio.tts_enabled,
+            expressiveness=settings.audio.tts_expressiveness,
             **({"include_alignments": True} if track_speech else {}),
         )
         router = get_model_router()
@@ -303,8 +308,12 @@ def main() -> int:
             prompt = generate_system_prompt(
                 settings=prompt_settings, memories=recalled_memories
             )
+            prompt += voice_delivery_instruction(enabled=settings.audio.tts_enabled)
             if tts.engine == "chatterbox_turbo":
-                prompt += speech_event_instruction(enabled=True)
+                prompt += speech_event_instruction(
+                    enabled=settings.audio.tts_enabled,
+                    expressiveness=settings.audio.tts_expressiveness,
+                )
             return prompt
 
         _wait_re = re.compile(
@@ -810,7 +819,8 @@ def main() -> int:
                         )
                     logger.info("Discarded an old response because speech resumed.")
                     return False
-                reply_text = strip_internal_reply_notes(response.content)
+                speech_reply = strip_internal_reply_notes(response.content)
+                reply_text = strip_speech_events(speech_reply)
                 if not reply_text:
                     raise RuntimeError("Provider returned no dialogue after filtering status notes")
                 if web_ui is not None:
@@ -840,7 +850,7 @@ def main() -> int:
                 conv_manager.schedule_summary(router_or_provider=router)
                 if streamed is None:
                     request["reply_started"] = True
-                    said = say(reply_text)
+                    said = say(speech_reply)
                 else:
                     said = streamed.spoken
                     if playback_captions and not said and streamed.first_audio_seconds is None:

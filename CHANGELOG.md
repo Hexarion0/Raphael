@@ -2,6 +2,10 @@
 
 ## Unreleased — 0.3.6 development
 
+- Add expressive spoken phrasing and contextual Turbo vocal cues with configurable
+  expressive/natural/off frequency, inline placement, and bounded streamed replies.
+  Map giggle/moan aliases to native chuckle/groan; keep cues out of Piper fallback,
+  captions, and newly stored batch dialogue. Preserve native sampling defaults.
 - Add confirmed current-project, goal, and occupation memory with local recall,
   short corrections, source attribution, and targeted forgetting. Use recent user
   dialogue to resolve short references during bounded memory recall.

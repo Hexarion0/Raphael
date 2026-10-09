@@ -70,12 +70,33 @@ It names the exact reference WAV/transcript and records the pinned model revisio
 benchmarks are kept under ignored `data/` paths. The inference environment is pinned in
 `scripts/voice_requirements/clone.txt`.
 
-Turbo's nine verified event markers are optional and only valid at the beginning of a
-spoken sentence: `[clear throat]`, `[sigh]`, `[shush]`, `[cough]`, `[groan]`, `[sniff]`,
-`[gasp]`, `[chuckle]`, and `[laugh]`. With Turbo selected, RAPHAEL's dialogue prompt says
-to use one sparingly when a brief audible event adds meaning; normal replies have no marker.
-The reusable `speech_event_instruction` and `add_speech_event` helpers keep dialogue policy
-separate from backend parsing. These markers control vocal events, not sustained moods.
+Turbo's nine verified event markers are `[clear throat]`, `[sigh]`, `[shush]`, `[cough]`,
+`[groan]`, `[sniff]`, `[gasp]`, `[chuckle]`, and `[laugh]`. They can appear at the start of
+a sentence or inline at a reaction point. RAPHAEL also accepts `[giggle]` as `[chuckle]`
+and `[moan]` as `[groan]`. These are application aliases: Turbo has no verified native
+moan token, so the latter is an approximation, not a distinct moaning voice.
+The native set and inline placement follow the
+[official Turbo demo](https://github.com/resemble-ai/chatterbox/blob/ed27b95ee46b95be201147bafe5ca85ac57ac4f2/gradio_tts_turbo_app.py).
+
+`TTS_EXPRESSIVENESS=expressive` is the default. It permits up to two events per reply,
+including across streamed sentences; `natural` permits one, and `off` removes them all.
+The limits also apply to direct batch synthesis. Stacked cues are collapsed. The prompt
+asks for at most one cue per sentence and usually zero or one in a short reply. It pairs
+chuckles with amusement, sighs with relief or shared weariness, gasps with surprise, and
+groans with light frustration. Serious or sensitive moments stay calm; coughs, sniffs,
+and shushing need a specific reason. No events are inserted automatically from keywords.
+
+All spoken engines receive guidance for warmer wording, varied short clauses, natural
+pauses, and tone suited to the conversation. Piper does not perform Turbo events; they
+are removed before Piper synthesis, including after a Turbo failure. Captions, web
+replies, logs, and newly saved assistant turns omit cues while Turbo receives them.
+Existing archived turns are not rewritten. A standalone supported event can be synthesized
+directly with Turbo, but model replies should still contain dialogue.
+
+These settings control event frequency and spoken phrasing, not sustained acoustic moods.
+The pinned Turbo engine ignores the original Chatterbox `exaggeration` and CFG controls,
+so RAPHAEL does not expose a misleading emotion-strength slider. The existing voice
+reference and sampling defaults are retained. Restart RAPHAEL after changing `.env`.
 
 ## Sentence queue and interruption
 
@@ -92,6 +113,18 @@ add to the reported first-audio times. Device output must be available for playb
 
 ## Reproduction
 
+To save just three expression previews using the local clone environment on CPU:
+
+```bash
+data/voice/envs/clone/bin/python scripts/preview_voice_expression.py
+```
+
+This uses the installed model and primary reference, makes no network request, and
+does not play audio or allocate CUDA memory. WAVs and a timing report go under ignored
+`data/voice/expressive-previews/`. `--expressiveness off` generates the same phrases
+without effects for comparison; `--output PATH` selects another local output directory.
+This is a synthesis check, not a judgment of conversational timing or audible quality.
+
 Run the full on-device TTS/STT and playback test with:
 
 ```bash
@@ -99,7 +132,8 @@ Run the full on-device TTS/STT and playback test with:
 ```
 
 It plays and saves the short response, a multi-sentence response, a longer reply, `[chuckle]`,
-`[sigh]`, two rapid requests, an interrupted reply, the Piper fallback, a CUDA STT overlap,
+`[sigh]`, inline cues and aliases, a cue-budget example, two rapid requests, an interrupted
+reply, the Piper fallback, a CUDA STT overlap,
 and a post-restart sample. It writes a private `index.html` listening page, WAVs, and
 `report.json` below `data/voice/benchmarks/raphael-turbo-runtime/`. Use `--no-playback` to
 save samples without sending them to the audio device.

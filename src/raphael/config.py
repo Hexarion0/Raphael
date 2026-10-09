@@ -148,6 +148,9 @@ class AudioConfig(BaseModel):
     tts_chatterbox_python: str = Field(default="data/voice/envs/clone/bin/python")
     tts_min_free_vram_mb: int = Field(default=3000, ge=0, le=6144)
     tts_audio_queue_size: int = Field(default=2, ge=1, le=4)
+    tts_expressiveness: Literal["expressive", "natural", "off"] = Field(
+        default="expressive", description="Vocal event frequency; not a model mood control",
+    )
     tts_synthesis_timeout_seconds: float = Field(default=60.0, ge=0.1, le=300)
     tts_playback_latency: float = Field(
         default=0.12, gt=0, le=1,
@@ -249,6 +252,7 @@ class Settings(BaseSettings):
     tts_chatterbox_python: str = Field(default="data/voice/envs/clone/bin/python")
     tts_min_free_vram_mb: int = Field(default=3000, ge=0, le=6144)
     tts_audio_queue_size: int = Field(default=2, ge=1, le=4)
+    tts_expressiveness: Literal["expressive", "natural", "off"] = Field(default="expressive")
     tts_synthesis_timeout_seconds: float = Field(default=60.0, ge=0.1, le=300)
     tts_playback_latency: float = Field(default=0.12, gt=0, le=1)
     tts_speed: float = Field(default=1.0, gt=0.0, le=3.0)
@@ -333,6 +337,7 @@ class Settings(BaseSettings):
             tts_chatterbox_python=self.tts_chatterbox_python,
             tts_min_free_vram_mb=self.tts_min_free_vram_mb,
             tts_audio_queue_size=self.tts_audio_queue_size,
+            tts_expressiveness=self.tts_expressiveness,
             tts_synthesis_timeout_seconds=self.tts_synthesis_timeout_seconds,
             tts_playback_latency=self.tts_playback_latency,
             tts_speed=self.tts_speed,

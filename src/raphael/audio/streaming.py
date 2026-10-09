@@ -8,7 +8,7 @@ from collections.abc import Callable
 from contextvars import copy_context
 from dataclasses import dataclass
 
-from raphael.audio.speech_events import strip_speech_events
+from raphael.audio.speech_events import SpeechEventLimiter, strip_speech_events
 from raphael.conversation import INTERNAL_REPLY_NOTES
 from raphael.latency import active_trace, mark
 from raphael.logging import get_logger
@@ -374,6 +374,10 @@ def stream_reply(
     visible, audible, sentences = VisibleText(omit_code=False), VisibleText(), SentenceBuffer()
     speech_text = ""
     pipeline: _SentencePipeline | None = None
+    expressiveness = getattr(tts, "expressiveness", "expressive")
+    if not isinstance(expressiveness, str):
+        expressiveness = "expressive"
+    event_limiter = SpeechEventLimiter(expressiveness)
 
     def audio_started(sentence: str) -> None:
         if result.first_audio_seconds is None:
@@ -390,6 +394,7 @@ def stream_reply(
         )
 
     def speak(parts: list[str]) -> None:
+        parts = [clean for part in parts if (clean := event_limiter.apply(part))]
         if parts:
             mark("first_tts_chunk", chars=len(parts[0]))
         if pipeline is not None:
