@@ -2,6 +2,14 @@
 
 ## Unreleased — 0.3.6 development
 
+- Add confirmed current-project, goal, and occupation memory with local recall,
+  short corrections, source attribution, and targeted forgetting. Use recent user
+  dialogue to resolve short references during bounded memory recall.
+- Store validated conversation state with user context, decisions, open threads,
+  and superseded plans; retain plain-summary compatibility and retry invalid state.
+- Compose a shorter persona prompt around continuity, natural reactions, opinions,
+  and bounded initiative while preserving custom preferences and existing sessions.
+- Mask known forgotten details in other recalled notes as well as chat history.
 - Enforce `/local` through reply fallback, running summaries, and ambient speech
   classification, retaining the policy across summary persistence and restart.
 - Preserve unrelated facts when forgetting an absent topic, and keep old forgotten

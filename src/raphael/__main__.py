@@ -287,7 +287,13 @@ def main() -> int:
             web_ui.load_history(conv_manager.get_recent_turns(limit=100))
 
         def build_system_prompt(query: str = "") -> str:
-            recalled_memories = recall_context_memories(memory_store, query)
+            recalled_memories = recall_context_memories(
+                memory_store, query,
+                recent_messages=[
+                    ChatMessage(turn.role, turn.content)
+                    for turn in conv_manager.get_recent_turns(limit=8)
+                ],
+            )
             profile_name = memory_store.get_fact("user:preferred_name")
             prompt_settings = settings
             if profile_name is not None:

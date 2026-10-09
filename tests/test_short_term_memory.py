@@ -381,7 +381,7 @@ def test_real_router_uses_summary_purpose_even_for_code_transcript(temp_store):
     assert manager.summarize_older_turns(router) == "Discussed Python code."
     arguments = providers.stream_with_fallback.call_args.kwargs
     assert arguments["model"] == get_settings().providers.nim_model
-    assert arguments["max_tokens"] == 150
+    assert arguments["max_tokens"] == 600
 
 
 def test_pending_turns_remain_available_while_summary_is_batched(temp_store):

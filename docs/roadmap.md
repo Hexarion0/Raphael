@@ -14,9 +14,9 @@ before treating it as ready for everyday use.
 | Voice loop | Wake recognition, local STT, provider streaming, sentence playback, interruptions, captions | Live microphone/speaker acceptance of the current combined changes |
 | Voices | Default Piper/Amy; optional custom Turbo and local Piper fallback | Reproducible custom-voice installation and private asset import on a fresh machine |
 | Providers | NIM, Groq, OpenRouter, Ollama, routing, retries/fallback, latency tracing | Usage totals, budget controls, broader live fallback verification |
-| Memory | SQLite conversations, summaries, confirmed facts, corrections, forgetting, automated restart recall | Live voice-based restart acceptance |
+| Memory | SQLite conversations, structured state, confirmed profiles/goals, contextual recall, corrections, forgetting, automated restart recall | Live voice-based restart acceptance and summary quality evaluation |
 | Actions | Trusted module discovery, validation, local telemetry, allowlisted Linux app launching | Model-selected calls, web search, reminders, live desktop launch acceptance |
-| Personality | Editable preferences, curiosity, voice-requested style updates/reset | Continued evaluation during real conversations |
+| Personality | Modular persona prompt, continuity rules, opinions/initiative, editable preferences, voice-requested style updates/reset | Continued evaluation during real conversations |
 | Setup | Amy/custom voice choice, device/key configuration, missing-asset reporting | Automatic Turbo setup, a desktop installer with a managed runtime, and clean-machine validation |
 | Desktop web interface | PC-local voice/text chat, live captions, status, and controls | Same-Wi-Fi phone access and desktop acceptance |
 | Messaging, tone, Windows, presence | Planned | Implementation |
@@ -79,9 +79,13 @@ to be available just because the client is configured.
 - [x] Confirmation before conversational facts or corrections are saved.
 - [x] Proposal cancellation on rejection, unrelated requests, expiry, or restart.
 - [x] Ranked word/alias recall and local answers for supported saved facts.
+- [x] Confirmed current project, goal, and occupation with source attribution and short corrections.
+- [x] Resolve short recall references from recent user dialogue with a total context budget.
+- [x] Validated summary state retaining decisions, unfinished threads, and superseded plans.
 - [x] Suppress known forgotten wording from model context; retain archived chat separately.
 - [x] Automated restart, correction, and memory isolation tests.
 - [x] Editable personality file and managed style updates/reset by voice.
+- [x] Modular personality and continuity prompt with bounded initiative and reasoned opinions.
 - [x] Optional ambient follow-ups with intended-listener classification.
 - [x] Linked interruption fragments and estimated playback context for continuation.
 - [x] Keep internal interruption status out of spoken dialogue and provider reply examples.

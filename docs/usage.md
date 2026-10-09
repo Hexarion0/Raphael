@@ -32,6 +32,9 @@ controls provider routing; it does not disable microphone capture or persistence
 
 ## Personality and memory
 
+See [memory and personality](memory-persona.md) for confirmed goals and profiles,
+contextual recall, structured conversation state, and example conversations.
+
 The voice persona is a warm, mature, confident feminine companion: playful in
 casual conversation, focused during tasks, and patient when you're frustrated.
 She uses expressive, natural conversational phrasing, with concise answers that

@@ -30,6 +30,35 @@ MONTHS = {
     )
     for name in names.split()
 }
+PROFILE_TOPICS = {
+    "current project": "current_project", "active project": "current_project",
+    "goal": "goal", "occupation": "occupation", "job": "occupation",
+}
+PROFILE_STATEMENTS = {
+    "user:current_project": "my current project is",
+    "user:goal": "my goal is", "user:occupation": "my occupation is",
+}
+
+
+def parse_profile_fact(text: str) -> tuple[str, str, str, MemoryType] | None:
+    """Recognize bounded first-person profile statements without guessing intent."""
+    patterns = (
+        (r"my (?:current|active) project (?:is(?: now)?|has changed to) (.+)",
+         "current_project", "Your current project is", MemoryType.PROJECT),
+        (r"my (?:current )?goal is (.+)", "goal", "Your goal is", MemoryType.PROJECT),
+        (r"(?:i work as|my (?:job|occupation) is) (.+)",
+         "occupation", "Your occupation is", MemoryType.FACT),
+    )
+    for pattern, key, description, kind in patterns:
+        match = re.fullmatch(pattern, text, re.I)
+        if match:
+            value = match.group(1).strip()
+            if not 2 <= len(value) <= 180 or re.match(
+                r"^(?:not|unknown|unsure|maybe|probably)\b", value, re.I,
+            ):
+                return None
+            return f"user:{key}", value, f"{description} {value}.", kind
+    return None
 
 
 def parse_project_date(text: str, now: datetime) -> str | None:
@@ -77,6 +106,10 @@ class MemoryService:
         """Track an explicit topic for a subsequent short correction."""
         self.focus_key = None
         lowered = text.casefold()
+        for topic, key in PROFILE_TOPICS.items():
+            if re.search(r"\b" + topic + r"\b", lowered):
+                self.focus_key = f"user:{key}"
+                return
         if re.search(r"\b(?:project|development|developing)\b", lowered):
             self.focus_key = "raphael:project_start_date"
         if "first commit" in lowered:
@@ -104,6 +137,7 @@ class MemoryService:
         if pending is not None and time.monotonic() <= pending[2]:
             answer = original.casefold().strip(" .!?")
             if answer in {"yes", "yeah", "yes please", "save it", "remember that", "confirm"}:
+                pending[1].source = "user_confirmed"
                 return self._save(pending[0], pending[1])
             if answer in {"no", "no thanks", "don't save it", "do not save it", "cancel",
                           "never mind", "forget that"}:
@@ -156,6 +190,14 @@ class MemoryService:
                 if remembered is not None:
                     return remembered.content
             if re.fullmatch(
+                r"(?:what(?:'s| is)|do you (?:remember|know))\s+my "
+                r"(?:current project|active project|goal|occupation|job)[?.!]*",
+                original, re.I,
+            ) and self.focus_key:
+                remembered = self.store.get_fact(self.focus_key)
+                if remembered is not None:
+                    return remembered.content
+            if re.fullmatch(
                 r"(?:what(?:'s| is) my name|what do you call me)[?.!]*",
                 original,
                 re.I,
@@ -174,6 +216,7 @@ class MemoryService:
             re.I,
         )
         name = re.fullmatch(r"(?:my name is|call me|i prefer to be called)\s+(.+)", clean, re.I)
+        profile = parse_profile_fact(clean)
         if favorite:
             topic = favorite.group(1).lower().replace("colour", "color")
             key, value = "user:favorite_" + topic, favorite.group(2).strip()
@@ -190,6 +233,8 @@ class MemoryService:
                 return None
             clean = f"Your preferred name is {value}."
             kind = MemoryType.PREFERENCE
+        elif profile:
+            key, value, clean, kind = profile
         elif re.search(
             r"\b(?:project|development|developing|building|first commit|start date)\b",
             clean,
@@ -216,7 +261,10 @@ class MemoryService:
             short = re.fullmatch(r"(?:it(?:'s| is)\s+)?(.{1,80})", clean, re.I)
             if (
                 short
-                and self.focus_key.startswith("user:favorite_")
+                and (
+                    self.focus_key.startswith("user:favorite_")
+                    or self.focus_key in PROFILE_STATEMENTS
+                )
                 and not re.match(
                     r"^(?:i|you|that|this|wrong|incorrect|stop|wait|hold|what|huh|"
                     r"sorry|never|not|don'?t)\b",
@@ -225,9 +273,15 @@ class MemoryService:
                 )
             ):
                 key, value = self.focus_key, short.group(1).strip()
-                topic = key.split("favorite_", 1)[1]
-                clean = f"Your favorite {topic} is {value}."
-                kind = MemoryType.PREFERENCE
+                if key.startswith("user:favorite_"):
+                    topic = key.split("favorite_", 1)[1]
+                    clean = f"Your favorite {topic} is {value}."
+                    kind = MemoryType.PREFERENCE
+                else:
+                    profile = parse_profile_fact(f"{PROFILE_STATEMENTS[key]} {value}")
+                    if profile is None:
+                        return None
+                    key, value, clean, kind = profile
         if key is None:
             if not explicit:
                 self.observe_topic(original)
