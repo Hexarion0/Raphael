@@ -16,6 +16,7 @@ def main() -> int:
     """Use the separate clone environment to save WAVs and measured synthesis metadata."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--cues-only", action="store_true", help="Save standalone effect clips")
     parser.add_argument("--expressiveness", choices=("expressive", "natural", "off"),
                         default="expressive")
     args = parser.parse_args()
@@ -29,6 +30,7 @@ def main() -> int:
     from chatterbox.tts_turbo import ChatterboxTurboTTS
 
     from raphael.audio.speech_events import SpeechEventLimiter
+    from raphael.audio.vocal_cues import create_turbo_renderer
 
     out = args.output or root / "data/voice/expressive-previews" / datetime.now().strftime(
         "%Y%m%d-%H%M%S"
@@ -44,19 +46,32 @@ def main() -> int:
         model.prepare_conditionals(
             str(root / "data/voice/references/raphael/reference-1.wav"), exaggeration=0.0,
         )
+        event_reference = root / "data/voice/references/raphael/event-style.wav"
+        cue_audio = {key: root / f"data/voice/references/raphael/{key}.wav"
+                     for key in ("sigh", "groan")}
+        renderer = (
+            create_turbo_renderer(model, event_reference, cue_audio)
+            if event_reference.is_file() or any(path.is_file() for path in cue_audio.values())
+            else None
+        )
     report: dict = {"device": "cpu", "expressiveness": args.expressiveness,
                     "seed": 42, "load_seconds": round(time.monotonic() - started, 2),
                     "notes": "Offline synthesis only; speaker playback and quality not judged.",
-                    "samples": []}
+                    "vocal_cues_enabled": renderer is not None, "samples": []}
     for name, text in (
         ("chuckle", "[chuckle] You got me."),
         ("sigh", "[sigh] That's a relief."),
         ("moan-alias", "Oh! [moan] Not again."),
     ):
+        if args.cues_only:
+            text = {"chuckle": "[chuckle]", "sigh": "[sigh]", "moan-alias": "[moan]"}[name]
         normalized = SpeechEventLimiter(args.expressiveness).apply(text)
+        if not normalized:
+            continue
         started = time.monotonic()
         with contextlib.redirect_stdout(sys.stderr):
-            audio = model.generate(normalized).squeeze().numpy()
+            audio = (renderer.render(normalized) if renderer is not None else
+                     model.generate(normalized).squeeze().numpy())
         if not audio.size or not np.isfinite(audio).all():
             raise RuntimeError(f"Invalid preview waveform: {name}")
         sf.write(out / f"{name}.wav", audio, model.sr)

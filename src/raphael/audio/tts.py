@@ -220,6 +220,12 @@ class TextToSpeech:
             transcript.read_text(encoding="utf-8"),
             min_free_vram_mib=self.min_free_vram_mib,
             synthesis_timeout=get_settings().audio.tts_synthesis_timeout_seconds,
+            event_reference=(
+                self._resolve_local_path(data["event_reference_audio"])
+                if data.get("event_reference_audio") else None
+            ),
+            cue_audio={key: self._resolve_local_path(path)
+                       for key, path in data.get("event_audio", {}).items()},
         )
         return self._chatterbox
 

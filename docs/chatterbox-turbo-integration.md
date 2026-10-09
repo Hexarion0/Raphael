@@ -17,6 +17,8 @@ Required local assets:
 | Pinned model | `data/voice/models/chatterbox-turbo/` | No |
 | Reference audio | `data/voice/references/raphael/reference-1.wav` | No |
 | Reference transcript | `data/voice/references/raphael/reference-1.txt` | No |
+| Optional effect style | `data/voice/references/raphael/event-style.wav` | No |
+| Selected cue clips | `data/voice/references/raphael/sigh.wav` and `groan.wav` | No |
 | Optional custom Piper fallback | `models/tts/en_US-raphael-medium.onnx` and `.onnx.json` | No |
 
 For a manual setup, from the checkout root with Python 3.12 installed:
@@ -95,8 +97,46 @@ directly with Turbo, but model replies should still contain dialogue.
 
 These settings control event frequency and spoken phrasing, not sustained acoustic moods.
 The pinned Turbo engine ignores the original Chatterbox `exaggeration` and CFG controls,
-so RAPHAEL does not expose a misleading emotion-strength slider. The existing voice
-reference and sampling defaults are retained. Restart RAPHAEL after changing `.env`.
+so RAPHAEL does not expose a misleading emotion-strength slider. The speaking voice
+reference and sampling defaults are retained. Restart after changing `.env` or the manifest.
+
+### Faint sighs and groans
+
+The selected reference can make native effects faint even when the tokenizer and audio
+pipeline accept their tags. CPU checks on 2026-10-10 found the original standalone sigh
+at RMS 0.00042 and groan at 0.00111; greatly amplifying these produced poor listening results.
+Using a separate speaking-style prompt while keeping RAPHAEL's speaker embedding and
+waveform-decoder reference produced RMS 0.02364 and 0.00805 at seed 42.
+These measurements establish signal level, not human sound quality.
+
+The optional `event_reference_audio` manifest entry enables separate conditioning for
+sighs and groans. The worker renders each effect separately, balances it with at most
+3x gain, and caches it in memory. Normal speech uses the original conditionals, including
+after an effect failure. Very faint, invalid, or excessively long effects are omitted with
+a warning rather than amplified into noise. Inline effects retain their position with a
+60 ms joining pause. Other native cues keep the original synthesis path.
+
+The `event_audio` manifest entries prefer selected local 24 kHz WAVs for each cue. On this
+machine they contain the sigh at seed 73 (variant B) and the groan at seed 42 selected during
+listening. These exact clips are reused across restarts, avoiding new variants from GPU
+sampling. The clips work even if the optional style reference is absent. Invalid files
+fall back to synthesis. Generated cue defaults use the same seeds and retain the clone's
+speaker identity; waveform level alone does not establish the right sound.
+
+The local effect-style file comes from the public reference used by the
+[official Turbo demo](https://github.com/resemble-ai/chatterbox/blob/master/gradio_tts_turbo_app.py).
+To reproduce this optional asset from the checkout root:
+
+```bash
+curl --fail --location --output data/voice/references/raphael/event-style.wav \
+  https://storage.googleapis.com/chatterbox-demo-samples/prompts/female_random_podcast.wav
+```
+
+The WAVs stay outside Git. You can replace the style with a clean reference over five
+seconds long and restart. If it is missing or cannot be conditioned, the worker reports
+that it is using native inline effects when selected clips are also unavailable. Without
+selected clips, the first use of each separately rendered effect adds a synthesis call;
+later replies reuse its cached cue. `[moan]` still maps to a groan.
 
 ## Sentence queue and interruption
 
@@ -124,6 +164,10 @@ does not play audio or allocate CUDA memory. WAVs and a timing report go under i
 `data/voice/expressive-previews/`. `--expressiveness off` generates the same phrases
 without effects for comparison; `--output PATH` selects another local output directory.
 This is a synthesis check, not a judgment of conversational timing or audible quality.
+`--cues-only` saves standalone clips. When setting up without existing selected clips,
+install the style reference first, generate standalone previews, listen, then copy the
+chosen sigh and groan files to the manifest paths. The groan preview is named
+`moan-alias.wav`. Existing selected clips take precedence over new generation.
 
 Run the full on-device TTS/STT and playback test with:
 

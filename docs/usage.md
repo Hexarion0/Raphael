@@ -352,6 +352,10 @@ Piper uses the spoken phrasing but cannot render Turbo's effects. `[giggle]` map
 can use `[chuckle] You got me.` or `Oh! [groan] Not again.`
 See [Turbo voice details](chatterbox-turbo-integration.md) for the supported events
 and local listening benchmark. The setting controls cue frequency, not emotion intensity.
+If sighs or groans are missing or robotic, the voice reference may weaken them. The
+optional effect-style reference in the voice manifest enables separate, cached cues
+while retaining the original speaker embedding and normal speech reference. See the
+same guide for the local asset and reproduction steps; `[moan]` remains a groan alias.
 
 ## Streaming replies and shared GPU use
 

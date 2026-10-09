@@ -23,6 +23,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", type=Path, required=True)
     parser.add_argument("--reference", type=Path, required=True)
+    parser.add_argument("--event-reference", type=Path)
+    parser.add_argument("--sigh-audio", type=Path)
+    parser.add_argument("--groan-audio", type=Path)
     parser.add_argument("--min-free-vram-mib", type=int, default=3000)
     args = parser.parse_args()
     model_dir, reference = args.model.resolve(), args.reference.resolve()
@@ -36,6 +39,9 @@ def main() -> int:
             import numpy as np
             import torch
             from chatterbox.tts_turbo import ChatterboxTurboTTS
+
+            sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+            from raphael.audio.vocal_cues import create_turbo_renderer
 
             torch.set_num_threads(4)
             free_bytes, total_bytes = torch.cuda.mem_get_info()
@@ -61,6 +67,17 @@ def main() -> int:
             load_seconds = time.perf_counter() - load_started
             condition_started = time.perf_counter()
             model.prepare_conditionals(str(reference), exaggeration=0.0)
+            renderer = None
+            cue_audio = {key: path for key, path in
+                         (("sigh", args.sigh_audio), ("groan", args.groan_audio))
+                         if path is not None}
+            if args.event_reference is not None and (
+                args.event_reference.is_file() or any(path.is_file() for path in cue_audio.values())
+            ):
+                try:
+                    renderer = create_turbo_renderer(model, args.event_reference, cue_audio)
+                except Exception:
+                    traceback.print_exc(file=sys.stderr)
             torch.cuda.synchronize()
             condition_seconds = time.perf_counter() - condition_started
             pid = os.getpid()
@@ -73,6 +90,7 @@ def main() -> int:
             "conditioning_seconds": condition_seconds,
             "free_vram_before_load_mib": free_mib,
             "total_vram_mib": int(total_bytes / 2**20),
+            "vocal_cues_enabled": renderer is not None,
         })
     except Exception as err:
         sys.stdout = protocol
@@ -90,7 +108,7 @@ def main() -> int:
             request_id, text = request["id"], request["text"]
             started = time.perf_counter()
             with contextlib.redirect_stdout(sys.stderr), torch.inference_mode():
-                audio = model.generate(text)
+                audio = renderer.render(text) if renderer is not None else model.generate(text)
                 torch.cuda.synchronize()
             audio = np.asarray(audio, dtype=np.float32).reshape(-1)
             if not audio.size or not np.isfinite(audio).all():

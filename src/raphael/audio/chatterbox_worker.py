@@ -38,6 +38,8 @@ class ChatterboxTurboWorker:
         startup_timeout: float = 180.0,
         min_free_vram_mib: int = 3000,
         synthesis_timeout: float = 60.0,
+        event_reference: str | Path | None = None,
+        cue_audio: dict[str, str | Path] | None = None,
     ) -> None:
         # Preserve virtualenv launchers: resolve() follows the venv's python symlink
         # to the base interpreter, which then cannot see venv site-packages.
@@ -45,6 +47,11 @@ class ChatterboxTurboWorker:
         self.script = Path(script).resolve()
         self.model = Path(model).expanduser().resolve()
         self.reference = Path(reference).expanduser().resolve()
+        self.event_reference = (
+            Path(event_reference).expanduser().resolve() if event_reference is not None else None
+        )
+        self.cue_audio = {key: Path(path).expanduser().resolve()
+                          for key, path in (cue_audio or {}).items()}
         self.reference_text = reference_text.strip()
         self.startup_timeout = startup_timeout
         if not math.isfinite(synthesis_timeout) or synthesis_timeout <= 0:
@@ -85,13 +92,19 @@ class ChatterboxTurboWorker:
                 env.update(HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1", PYTHONUNBUFFERED="1")
                 self._ready.clear()
                 self._startup_result = {}
+                command = [
+                    str(self.python), str(self.script),
+                    "--model", str(self.model),
+                    "--reference", str(self.reference),
+                    "--min-free-vram-mib", str(self.min_free_vram_mib),
+                ]
+                if self.event_reference is not None:
+                    command += ["--event-reference", str(self.event_reference)]
+                for cue in ("sigh", "groan"):
+                    if cue in self.cue_audio:
+                        command += [f"--{cue}-audio", str(self.cue_audio[cue])]
                 self._process = subprocess.Popen(
-                    [
-                        str(self.python), str(self.script),
-                        "--model", str(self.model),
-                        "--reference", str(self.reference),
-                        "--min-free-vram-mib", str(self.min_free_vram_mib),
-                    ],
+                    command,
                     cwd=self.script.parents[1],
                     env=env,
                     stdin=subprocess.PIPE,
@@ -128,6 +141,8 @@ class ChatterboxTurboWorker:
             ready.get("free_vram_before_load_mib", "unknown"),
         )
         self.startup_metrics = ready
+        if self.event_reference is not None and not ready.get("vocal_cues_enabled"):
+            logger.warning("Vocal effect reference unavailable; using native inline cues.")
 
     def start(self) -> dict:
         """Start the persistent model worker and return measured cold initialization data."""

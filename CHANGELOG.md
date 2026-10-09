@@ -2,6 +2,9 @@
 
 ## Unreleased — 0.3.6 development
 
+- Fix faint sigh/groan output using optional separate effect-style conditioning,
+  retained speaker identity, cached cues, and bounded level balancing. Restore
+  normal conditionals after each effect, including failures; reject inaudible cues.
 - Add expressive spoken phrasing and contextual Turbo vocal cues with configurable
   expressive/natural/off frequency, inline placement, and bounded streamed replies.
   Map giggle/moan aliases to native chuckle/groan; keep cues out of Piper fallback,
