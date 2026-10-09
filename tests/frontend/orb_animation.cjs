@@ -61,15 +61,15 @@ assert.equal(fallback.callbacks.size, 0, 'Missing canvas support must leave cont
 
 const page = harness();
 assert.equal(page.callbacks.size, 0, 'Connecting must start with a still orb');
-assert(page.canvas.width <= 480, 'High DPI rendering must be capped to limit work');
+assert(page.canvas.width <= 256, 'High DPI rendering must be capped to limit work');
 for (const state of ['idle', 'listening_wake', 'recording', 'processing', 'speaking']) {
   page.orb.update(state, false);
   assert.equal(page.callbacks.size, 1, state + ' must animate');
   const initial = page.draws.at(-1);
   for (let step = 0; step < 12; step++) page.tick(step * 50);
   assert.notEqual(page.draws.at(-1), initial, state + ' must visibly move');
-  assert(page.work.strokes <= 85, 'Batch canvas work to keep per-frame draw calls bounded');
-  assert(page.work.vertices <= 1800, 'Keep geometry light enough for shared audio/graphics load');
+  assert(page.work.strokes <= 60, 'Batch canvas work to keep per-frame draw calls bounded');
+  assert(page.work.vertices <= 800, 'Keep geometry light enough for shared audio/graphics load');
   const scheduled = [...page.callbacks.keys()];
   page.orb.update(state, false);
   assert.deepEqual([...page.callbacks.keys()], scheduled, 'Status polling must not restart animations');
@@ -99,7 +99,7 @@ page.tick(1000);
 page.pointerListeners.pointerleave();
 page.canvas.clientWidth = 64;
 page.listeners.resize();
-assert.equal(page.canvas.width, 96, 'Compact layouts must resize the rendering surface');
+assert.equal(page.canvas.width, 64, 'Compact layouts must resize the rendering surface');
 page.tick(1100);
 page.orb.update('offline', true);
 assert.equal(page.callbacks.size, 0, 'Disconnecting must stop animation');

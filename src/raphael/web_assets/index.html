@@ -268,8 +268,8 @@ function createOrb() {
   const frameRate = () => state === 'speaking' ? 16 : active() ? 20 : 12;
   const mesh = [];
   // Cache the silhouette's trigonometry instead of recalculating it every frame.
-  const silhouette = Array.from({length: 65}, (_, step) => {
-    const angle = step / 64 * tau;
+  const silhouette = Array.from({length: 33}, (_, step) => {
+    const angle = step / 32 * tau;
     return {
       x: Math.cos(angle), y: Math.sin(angle),
       sin3: Math.sin(angle * 3), cos3: Math.cos(angle * 3),
@@ -281,17 +281,17 @@ function createOrb() {
     const ring = Math.cos(latitude);
     return [ring * Math.cos(longitude), Math.sin(latitude), ring * Math.sin(longitude)];
   }
-  for (let latitude = -5; latitude <= 5; latitude++) {
+  for (let latitude = -3; latitude <= 3; latitude++) {
     const points = [];
-    for (let step = 0; step <= 32; step++) {
-      points.push(spherePoint(latitude * Math.PI / 12, step * Math.PI / 16));
+    for (let step = 0; step <= 24; step++) {
+      points.push(spherePoint(latitude * Math.PI / 8, step * Math.PI / 12));
     }
     mesh.push(points);
   }
-  for (let longitude = 0; longitude < 14; longitude++) {
+  for (let longitude = 0; longitude < 10; longitude++) {
     const points = [];
-    for (let step = 0; step <= 32; step++) {
-      points.push(spherePoint(-Math.PI / 2 + step * Math.PI / 32, longitude * Math.PI / 7));
+    for (let step = 0; step <= 24; step++) {
+      points.push(spherePoint(-Math.PI / 2 + step * Math.PI / 24, longitude * Math.PI / 5));
     }
     mesh.push(points);
   }
@@ -327,7 +327,7 @@ function createOrb() {
     }
     const projected = mesh.map(line => line.map(point => project(point)));
     const particles = [];
-    for (let index = 0; index < 24; index++) {
+    for (let index = 0; index < 12; index++) {
       const angle = index * 2.39996 + time * (.1 + current.speed * .16);
       const latitude = Math.sin(index * 1.73 + time * .16) * .85;
       const point = project(spherePoint(latitude, angle), 1.14, false);
@@ -364,8 +364,8 @@ function createOrb() {
       }
     }
     // Layered waves keep the silhouette alive as the core breathes and speaks.
-    for (let strand = 0; strand < 10; strand++) {
-      const seed = strand * .8;
+    for (let strand = 0; strand < 6; strand++) {
+      const seed = strand * 1.2;
       const wave3 = seed + time * .8, wave7 = -seed * 2 + time * 1.2;
       const wave11 = seed - time * .4;
       const sin3 = Math.sin(wave3), cos3 = Math.cos(wave3);
@@ -378,12 +378,12 @@ function createOrb() {
         const ripple = (point.sin3 * cos3 + point.cos3 * sin3) * .018
           + (point.sin7 * cos7 + point.cos7 * sin7) * .012
           + (point.cos11 * cos11 - point.sin11 * sin11) * .008;
-        const distance = radius * (.94 + strand * .0055 + ripple * (1 + energy * (1 + voice)));
+        const distance = radius * (.94 + strand * .011 + ripple * (1 + energy * (1 + voice)));
         const x = center + point.x * distance;
         const y = center + point.y * distance * stretch;
         if (index === 0) context.moveTo(x, y); else context.lineTo(x, y);
       }
-      const mix = strand / 9;
+      const mix = strand / 5;
       context.strokeStyle = `rgba(${Math.round(139 - mix * 36)}, ${Math.round(92 + mix * 140)}, 249, ${(.18 + mix * .3 + pointer.hover * .08) * brightness})`;
       context.lineWidth = width / 550;
       context.stroke();
@@ -392,8 +392,8 @@ function createOrb() {
     for (let ribbon = 0; ribbon < 2; ribbon++) {
       const segments = Array.from({length: 8}, () => []);
       let previous = null;
-      for (let step = 0; step <= 48; step++) {
-        const angle = step / 48 * tau;
+      for (let step = 0; step <= 32; step++) {
+        const angle = step / 32 * tau;
         const latitude = Math.sin(angle * 2 + ribbon * Math.PI + time * .25) * .48;
         const point = project(spherePoint(latitude, angle + ribbon * 1.4), .9);
         if (previous) {
@@ -473,8 +473,8 @@ function createOrb() {
   function refresh() {
     if (frame !== null) cancelAnimationFrame(frame);
     frame = null; lastFrame = null;
-    // Read layout only on refresh/resize and cap the backing surface on high-DPI screens.
-    width = Math.min(480, Math.round(canvas.clientWidth * Math.min(devicePixelRatio || 1, 1.5)));
+    // Use a smaller surface without high-DPI supersampling to keep the orb lightweight.
+    width = Math.min(256, Math.round(canvas.clientWidth * Math.min(devicePixelRatio || 1, 1)));
     if (width && canvas.width !== width) { canvas.width = width; canvas.height = width; }
     if (!moving()) {
       current = {...target()};
